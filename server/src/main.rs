@@ -63,7 +63,6 @@ fn main() {
 }
 
 /// Load and fully validate configuration without starting the server.
-#[allow(clippy::print_stderr, reason = "validation error output")]
 fn run_validate(explicit: Option<&str>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = praxis::load_config(explicit)?;
     validate_config(&config)?;
@@ -77,7 +76,6 @@ fn run_validate(explicit: Option<&str>) -> Result<(), Box<dyn std::error::Error 
 /// filter factory instantiation, chain expansion, ordering checks,
 /// and body-limit application.
 fn validate_config(config: &praxis_core::config::Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Validate log overrides (same validation as startup)
     praxis_core::logging::validate_log_overrides(config)?;
     let registry = praxis_filter::FilterRegistry::with_builtins();
     let health_registry = praxis_core::health::build_health_registry(&config.clusters);

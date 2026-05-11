@@ -30,6 +30,15 @@ pub struct HttpFilterContext<'a> {
     /// Downstream client IP address (from the TCP connection).
     pub client_addr: Option<IpAddr>,
 
+    /// Whether the downstream connection uses TLS.
+    ///
+    /// Set by the protocol layer from the connection's SSL
+    /// digest. Used by the forwarded headers filter to derive
+    /// `X-Forwarded-Proto` from the actual connection state
+    /// rather than the request URI scheme (which is absent
+    /// in HTTP/1.1).
+    pub downstream_tls: bool,
+
     /// Tracks which pipeline filter indices actually executed
     /// during the request phase. The response phase skips
     /// filters that did not run (e.g. due to `SkipTo`).

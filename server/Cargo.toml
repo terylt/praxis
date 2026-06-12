@@ -44,4 +44,5 @@ tempfile = { workspace = true }
 default = ["ai-inference"]
 ai-inference = ["praxis-filter/ai-inference", "praxis-protocol/ai-inference"]
 ext-proc = ["praxis-filter/ext-proc"]
+cpex = ["praxis-filter/cpex"]
 

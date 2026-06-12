@@ -63,6 +63,7 @@ page.
 | [ip-acl.yaml](configs/security/ip-acl.yaml) | Allow or deny by source IP/CIDR |
 | [downstream-read-timeout.yaml](configs/security/downstream-read-timeout.yaml) | Protect against slow client attacks with read timeouts |
 | [cors.yaml](configs/security/cors.yaml) | CORS preflight handling with origin validation |
+| [cpex.yaml](configs/security/cpex.yaml) | CPEX policy filter — multi-source JWT identity, APL routes, RFC 8693 delegation, PII scanning, audit, body rewriting (requires `--features cpex`) |
 
 ### Observability
 

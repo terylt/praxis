@@ -20,6 +20,25 @@ use crate::Rejection;
 /// switch on a single code while still seeing the underlying reason.
 const MCP_GATEWAY_DENIED_CODE: i64 = -32001;
 
+/// **Public response-header contract.** Echoes the originating
+/// `PluginViolation.code` (e.g. `auth.invalid_token`, `apl.policy`,
+/// `pii.detected`) on every CPEX-emitted rejection so audit pipelines,
+/// access logs, and downstream proxies can classify denials without
+/// parsing the body. Sent on:
+///
+/// * HTTP 401 ([`auth_rejection`]) — identity / transport-level deny.
+/// * HTTP 200 ([`mcp_error_rejection`]) — application-level deny
+///   wrapped in a JSON-RPC error envelope.
+/// * HTTP 500 ([`super::filter::missing_mcp_metadata_rejection`]) —
+///   `mcp.method` missing from filter metadata.
+///
+/// Operators consuming this in audit / SIEM pipelines should treat the
+/// header value as a stable identifier (the code namespace is part of
+/// the API contract). The codes themselves are minor information
+/// disclosure — they name the rule that fired but never carry user
+/// data or claims; acceptable on the deny path.
+pub(super) const VIOLATION_HEADER: &str = "X-Cpex-Violation";
+
 /// Build an HTTP 401 rejection for transport-level authentication
 /// failures (missing / invalid / wrong-audience JWT). Per the MCP
 /// Authorization spec, identity failures are reported as HTTP 401
@@ -27,9 +46,9 @@ const MCP_GATEWAY_DENIED_CODE: i64 = -32001;
 /// to the status + header, not parse the body. The body is included
 /// only as a short human-readable diagnostic.
 ///
-/// The violation's `code` is also surfaced via an `X-Cpex-Violation`
-/// response header so middleware (audit, logging, downstream proxies)
-/// can classify denials without parsing the body.
+/// The violation's `code` is also surfaced via the
+/// [`VIOLATION_HEADER`] response header so middleware (audit, logging,
+/// downstream proxies) can classify denials without parsing the body.
 ///
 /// TODO: once the gateway exposes its own `OAuth` Protected Resource
 /// Metadata document, the `WWW-Authenticate` header should point at
@@ -46,7 +65,7 @@ pub(super) fn auth_rejection(violation: Option<&PluginViolation>) -> Rejection {
     let body = format!("{code}: {reason}");
     Rejection::status(401)
         .with_header("WWW-Authenticate", "Bearer")
-        .with_header("X-Cpex-Violation", code)
+        .with_header(VIOLATION_HEADER, code)
         .with_body(Bytes::from(body.into_bytes()))
 }
 
@@ -81,6 +100,31 @@ pub(super) fn mcp_error_rejection(
     violation: Option<&PluginViolation>,
     request_id: &serde_json::Value,
 ) -> Rejection {
+    let bytes = mcp_error_envelope_bytes(violation, request_id);
+    let violation_code = violation.map_or_else(
+        || "gateway.unknown".to_owned(),
+        |v| v.code.clone(),
+    );
+    Rejection::status(200)
+        .with_header("Content-Type", "application/json")
+        .with_header(VIOLATION_HEADER, violation_code)
+        .with_body(bytes)
+}
+
+/// Build only the JSON-RPC error envelope bytes (no HTTP status, no
+/// headers). Used by both:
+///
+/// * [`mcp_error_rejection`] — pre-upstream denies, where we get to
+///   build a full `Rejection` including headers.
+/// * `on_response_body` — post-phase denies, where the HTTP status and
+///   headers have already been sent to the client; the only thing left
+///   to mutate is the body bytes. Replacing the upstream response body
+///   with this envelope is the strongest enforcement available from
+///   the response body phase under the current praxis API.
+pub(super) fn mcp_error_envelope_bytes(
+    violation: Option<&PluginViolation>,
+    request_id: &serde_json::Value,
+) -> Bytes {
     let (violation_code, reason) = match violation {
         Some(v) => (v.code.clone(), v.reason.clone()),
         None => (
@@ -97,9 +141,5 @@ pub(super) fn mcp_error_rejection(
             "data": { "violation": violation_code },
         }
     });
-    let bytes = serde_json::to_vec(&body).unwrap_or_default();
-    Rejection::status(200)
-        .with_header("Content-Type", "application/json")
-        .with_header("X-Cpex-Violation", violation_code)
-        .with_body(Bytes::from(bytes))
+    Bytes::from(serde_json::to_vec(&body).unwrap_or_default())
 }

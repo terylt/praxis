@@ -3060,7 +3060,6 @@ name = "praxis-proxy-filter"
 version = "0.3.1"
 dependencies = [
  "apl-audit-logger",
- "apl-cmf",
  "apl-core",
  "apl-cpex",
  "apl-delegator-oauth",
@@ -3069,6 +3068,7 @@ dependencies = [
  "apl-pii-scanner",
  "async-trait",
  "bytes",
+ "chrono",
  "cpex-core",
  "dashmap",
  "http",

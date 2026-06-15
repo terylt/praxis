@@ -23,7 +23,6 @@ ext-proc = ["dep:praxis-proto", "dep:tonic", "dep:prost-wkt-types"]
 # `tokio` drives plugin init.
 cpex = [
     "dep:apl-audit-logger",
-    "dep:apl-cmf",
     "dep:apl-core",
     "dep:apl-cpex",
     "dep:apl-delegator-oauth",
@@ -39,7 +38,6 @@ workspace = true
 
 [dependencies]
 apl-audit-logger = { workspace = true, optional = true }
-apl-cmf = { workspace = true, optional = true }
 apl-core = { workspace = true, optional = true }
 apl-cpex = { workspace = true, optional = true }
 apl-delegator-oauth = { workspace = true, optional = true }
@@ -72,10 +70,12 @@ tracing = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-# Identity-resolution tests under `--features cpex` mint HS256 JWTs and
-# write transient policy YAML files. Always-on in test builds (the
-# overhead is small) so the `cpex` feature does not need to gate
-# dev-deps.
+# `--features cpex` tests mint HS256 JWTs, write transient policy YAML
+# files, and construct `RawDelegatedToken` instances directly (which
+# requires a `chrono::DateTime<Utc>` for `expires_at`). Always-on in
+# test builds (overhead is small) so the `cpex` feature does not need
+# to gate dev-deps.
+chrono = { workspace = true }
 jsonwebtoken = "9"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }

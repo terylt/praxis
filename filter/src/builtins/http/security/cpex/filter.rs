@@ -19,6 +19,7 @@
 )]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -33,7 +34,7 @@ use cpex_core::{
 use super::{
     cmf::{entity_for_mcp_method, entity_for_mcp_method_post},
     config::{BodyAccessMode, CpexFilterConfig},
-    error::{auth_rejection, mcp_error_rejection},
+    error::{VIOLATION_HEADER, auth_rejection, mcp_error_envelope_bytes, mcp_error_rejection},
     factories::{register_apl_visitor, register_builtin_factories},
     json_rpc::{
         build_content_for_method, build_response_content_for_method, json_rpc_id, json_rpc_id_value,
@@ -50,6 +51,16 @@ use crate::{
 // -----------------------------------------------------------------------------
 // CpexFilter
 // -----------------------------------------------------------------------------
+
+// State of the one-shot tokio runtime-flavor check performed on the
+// first request. See `CpexFilter::on_request` for the rationale.
+
+/// Initial state — no request has been served yet.
+const RUNTIME_UNCHECKED: u8 = 0;
+/// First request saw a multi-thread runtime; subsequent requests skip the check.
+const RUNTIME_OK: u8 = 1;
+/// First request saw a current-thread runtime; all requests reject.
+const RUNTIME_REJECTED: u8 = 2;
 
 /// Filter that runs the CPEX identity + APL pipeline against each
 /// request.
@@ -73,21 +84,34 @@ use crate::{
 ///
 /// # YAML configuration
 ///
+/// Filter fields sit directly under the `- filter:` entry; there is no
+/// `config:` wrapper. See `examples/configs/security/cpex.yaml` for a
+/// runnable example.
+///
 /// ```yaml
 /// filter: cpex
-/// config:
-///   config_path: /etc/praxis/cpex.yaml
-///   body_access: read_write   # optional; default read_only
+/// config_path: /etc/praxis/cpex.yaml
+/// body_access: read_write       # optional; default read_only
+/// require_mcp_metadata: true    # optional; default true
+/// init_timeout_secs: 30         # optional; default 30
 /// ```
 pub struct CpexFilter {
-    /// CPEX plugin manager — owns the loaded plugin instances and
-    /// dispatches hook chains. Shared via `Arc` so the async
-    /// `HttpFilter` methods can clone references cheaply.
-    mgr: Arc<PluginManager>,
     /// Filter-level configuration parsed from the YAML block. Held so
     /// `request_body_access` / `request_body_mode` / their response
     /// counterparts can branch on `body_access` per request.
     cfg: CpexFilterConfig,
+    /// CPEX plugin manager — owns the loaded plugin instances and
+    /// dispatches hook chains. Wrapped in `Arc` so the post-phase
+    /// `block_in_place` closure can hold its own handle without
+    /// borrowing `&self`.
+    mgr: Arc<PluginManager>,
+    /// One-shot runtime-flavor check. `on_response_body` drives async
+    /// work via `block_in_place`, which panics on a current-thread
+    /// runtime (praxis `work_stealing: false`). We can't query the
+    /// flavor from `new()` (no runtime attached yet), so we check on
+    /// the first request and cache the result. A fuller fix would
+    /// require `on_response_body` to be async upstream in praxis.
+    runtime_check: AtomicU8,
 }
 
 impl CpexFilter {
@@ -123,15 +147,32 @@ impl CpexFilter {
         // thread would panic if any caller (notably `#[tokio::test]`)
         // already has a runtime attached. Production startup has no
         // caller runtime; tests do; the thread hop is correct in both.
+        //
+        // The init future is wrapped in `tokio::time::timeout` so a
+        // misbehaving plugin's `initialize()` future can't hang startup
+        // / hot-reload indefinitely. The bundled identity-jwt plugin
+        // already has its own JWKS connect/request timeouts plus
+        // soft-fail-at-boot, so this is defense-in-depth for other
+        // init paths (custom plugins, future hooks) where a future
+        // could legitimately stall.
         let mgr_for_init = Arc::clone(&mgr);
+        let init_timeout = std::time::Duration::from_secs(cfg.init_timeout_secs);
         let init: Result<(), String> = std::thread::spawn(move || -> Result<(), String> {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| format!("cpex: failed to build init runtime: {e}"))?;
-            rt.block_on(mgr_for_init.initialize()).map_err(
-                |e: Box<PluginError>| format!("cpex: PluginManager::initialize failed: {e}"),
-            )
+            rt.block_on(async move {
+                match tokio::time::timeout(init_timeout, mgr_for_init.initialize()).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(format!("cpex: PluginManager::initialize failed: {e}")),
+                    Err(_) => Err(format!(
+                        "cpex: PluginManager::initialize timed out after {}s \
+                         (init_timeout_secs); likely a JWKS / OAuth endpoint is unreachable",
+                        init_timeout.as_secs(),
+                    )),
+                }
+            })
         })
         .join()
         .map_err(|panic| {
@@ -144,7 +185,11 @@ impl CpexFilter {
         })?;
         init.map_err(|s: String| -> FilterError { s.into() })?;
 
-        Ok(Self { mgr, cfg })
+        Ok(Self {
+            cfg,
+            mgr,
+            runtime_check: AtomicU8::new(RUNTIME_UNCHECKED),
+        })
     }
 
     /// Praxis-side factory hook, wired via `register_http` in
@@ -287,6 +332,25 @@ impl HttpFilter for CpexFilter {
         &self,
         ctx: &mut HttpFilterContext<'_>,
     ) -> Result<FilterAction, FilterError> {
+        // One-shot runtime-flavor check. `on_response_body` uses
+        // `block_in_place` to drive async work from a sync trait
+        // method, and that primitive panics on a current-thread
+        // tokio runtime (praxis `work_stealing: false`). Rather than
+        // crash mid-response, refuse to operate up front. After the
+        // first request this collapses to a single atomic load.
+        match self.runtime_check.load(Ordering::Relaxed) {
+            RUNTIME_UNCHECKED => {
+                let flavor = tokio::runtime::Handle::current().runtime_flavor();
+                if matches!(flavor, tokio::runtime::RuntimeFlavor::CurrentThread) {
+                    self.runtime_check.store(RUNTIME_REJECTED, Ordering::Relaxed);
+                    return Err(current_thread_runtime_error());
+                }
+                self.runtime_check.store(RUNTIME_OK, Ordering::Relaxed);
+            }
+            RUNTIME_REJECTED => return Err(current_thread_runtime_error()),
+            _ => {} // RUNTIME_OK — fall through.
+        }
+
         // Early identity gate. Saves the per-request body-buffer cost
         // on un-auth'd traffic — if there's no valid token, we never
         // reach `on_request_body` and the body never gets buffered.
@@ -323,10 +387,22 @@ impl HttpFilter for CpexFilter {
         }
 
         // Pull MCP-derived entity coords from durable filter_metadata.
-        // If the operator hasn't wired `mcp` upstream of us, or the
-        // request isn't an entity-bearing MCP method, we have nothing
-        // to dispatch and just allow.
+        // Missing `mcp.method` means praxis's built-in `mcp` filter
+        // didn't run before us — almost always a misconfigured chain
+        // (missing or ordered after `cpex`). Default to fail-closed
+        // so the misconfig is loud at first request. Operators
+        // fronting non-MCP traffic can opt out via
+        // `require_mcp_metadata: false`.
         let Some(method) = ctx.get_metadata("mcp.method").map(str::to_owned) else {
+            if self.cfg.require_mcp_metadata {
+                tracing::warn!(
+                    target: "cpex.filter",
+                    "no mcp.method in metadata — likely the `mcp` filter is missing \
+                     or ordered after `cpex` in the chain; rejecting (set \
+                     `require_mcp_metadata: false` to disable this guard)",
+                );
+                return Ok(FilterAction::Reject(missing_mcp_metadata_rejection()));
+            }
             tracing::trace!(target: "cpex.filter", "no mcp.method in metadata; no CMF dispatch");
             return Ok(FilterAction::BodyDone);
         };
@@ -414,43 +490,21 @@ impl HttpFilter for CpexFilter {
             if let Some(new_bytes) =
                 reserialize_json_rpc_body(&original, &method, &updated.message)
             {
-                // praxis exposes header mutations only from the request
-                // phase, and Transfer-Encoding is stripped as hop-by-hop
-                // on the upstream hop. The inbound `Content-Length`
-                // governs upstream body length — if the rewrite shrinks
-                // the body, pad with trailing ASCII spaces (which every
-                // JSON parser ignores) so the wire length still matches
-                // Content-Length. Rewrites that grow the body are not
-                // supported in this mode; the cmf executor's mutators
-                // (`redact()`) either shrink or are length-neutral
-                // today.
-                let final_bytes = match new_bytes.len().cmp(&original.len()) {
-                    std::cmp::Ordering::Less => {
-                        let mut padded = Vec::with_capacity(original.len());
-                        padded.extend_from_slice(&new_bytes);
-                        padded.resize(original.len(), b' ');
-                        Bytes::from(padded)
-                    }
-                    std::cmp::Ordering::Equal => new_bytes,
-                    std::cmp::Ordering::Greater => {
-                        tracing::warn!(
-                            target: "cpex.filter",
-                            method = %method,
-                            new_len = new_bytes.len(),
-                            original_len = original.len(),
-                            "rewritten body larger than original; sending without pad — upstream may see truncation",
-                        );
-                        new_bytes
-                    }
-                };
+                // Praxis recomputes upstream `Content-Length` from the
+                // rewritten body via `mutated_request_body_len` →
+                // `apply_mutated_content_length`, so we ship the bytes
+                // as-is (no pad). Padding here would corrupt byte-exact
+                // bodies that the upstream verifies via signature /
+                // hash, and the response-path pad-on-shrink (where
+                // `Content-Length` IS frozen) is unaffected.
                 tracing::debug!(
                     target: "cpex.filter",
                     method = %method,
-                    new_len = final_bytes.len(),
+                    new_len = new_bytes.len(),
                     original_len = original.len(),
                     "rewriting upstream body from mutated MessagePayload",
                 );
-                *body = Some(final_bytes);
+                *body = Some(new_bytes);
             }
         }
 
@@ -532,20 +586,29 @@ impl HttpFilter for CpexFilter {
             })
         });
 
-        // A post-phase deny is unusual but plausible (the upstream
-        // returned something the operator wants suppressed). For v0
-        // we log it; replacing the response stream with a synthetic
-        // error envelope here would require rewriting the upstream's
-        // headers too, which praxis doesn't expose from
-        // `on_response_body`.
+        // Post-phase deny — the upstream's response carries something
+        // the operator wants suppressed (output PII, late policy
+        // violation, etc.). We can't change the HTTP status or
+        // headers from `on_response_body`, but we CAN replace the
+        // body bytes with a JSON-RPC error envelope so the client
+        // sees a structured deny instead of the upstream's payload.
+        // Fits within the original Content-Length via the same
+        // pad-with-trailing-spaces trick used for ReadWrite rewrites
+        // (the envelope is almost always shorter than a real
+        // response body, so padding is the common case).
         if !cmf_result.continue_processing {
             tracing::warn!(
                 target: "cpex.filter",
                 method = %method,
                 entity = %entity_name,
                 violation = ?cmf_result.violation,
-                "post-phase deny surfaced as a log; response body still flows downstream",
+                "post-phase deny — replacing response body with JSON-RPC error envelope",
             );
+            let original = body.as_ref().cloned().unwrap_or_else(Bytes::new);
+            let request_id = json_rpc_id_value(&original);
+            let envelope =
+                mcp_error_envelope_bytes(cmf_result.violation.as_ref(), &request_id);
+            *body = Some(fit_to_original_length(envelope, original.len(), method.as_str(), "post-phase deny"));
             return Ok(FilterAction::Continue);
         }
 
@@ -556,25 +619,12 @@ impl HttpFilter for CpexFilter {
             if let Some(new_bytes) =
                 reserialize_json_rpc_response_body(&original, &method, &updated.message)
             {
-                let final_bytes = match new_bytes.len().cmp(&original.len()) {
-                    std::cmp::Ordering::Less => {
-                        let mut padded = Vec::with_capacity(original.len());
-                        padded.extend_from_slice(&new_bytes);
-                        padded.resize(original.len(), b' ');
-                        Bytes::from(padded)
-                    }
-                    std::cmp::Ordering::Equal => new_bytes,
-                    std::cmp::Ordering::Greater => {
-                        tracing::warn!(
-                            target: "cpex.filter",
-                            method = %method,
-                            new_len = new_bytes.len(),
-                            original_len = original.len(),
-                            "rewritten response body larger than original; sending without pad — client may see truncation",
-                        );
-                        new_bytes
-                    }
-                };
+                let final_bytes = fit_to_original_length(
+                    new_bytes,
+                    original.len(),
+                    method.as_str(),
+                    "response-side rewrite",
+                );
                 tracing::debug!(
                     target: "cpex.filter",
                     method = %method,
@@ -590,6 +640,77 @@ impl HttpFilter for CpexFilter {
 }
 
 // -----------------------------------------------------------------------------
+// runtime-flavor error
+// -----------------------------------------------------------------------------
+
+/// Error returned from `on_request` when the filter has been mounted
+/// into a current-thread tokio runtime. Hoisted into a helper so the
+/// first-request and cached-rejection branches return identical text.
+fn current_thread_runtime_error() -> FilterError {
+    "cpex filter requires a multi-threaded tokio runtime \
+     (server config `work_stealing: true`); current-thread runtime \
+     is unsupported because response-phase body transformation \
+     requires `block_in_place`"
+        .into()
+}
+
+/// Fit a freshly-built body to the original `Content-Length`: pad with
+/// trailing ASCII spaces on shrink (JSON parsers ignore them); pass
+/// through with a warning on grow (praxis can recompute
+/// `Content-Length` from the request body phase, but NOT from
+/// `on_response_body` yet — a longer response body risks HTTP/1.1
+/// framing desync, but dropping the rewrite is worse for the
+/// deny-replacement case).
+///
+/// Used only on the response side. The request side is unaffected:
+/// praxis already repairs request framing via `mutated_request_body_len`
+/// → `apply_mutated_content_length` (`stream_buffer.rs` →
+/// `with_body.rs`), so padding there would only corrupt byte-exact
+/// bodies the upstream might verify via signature / hash.
+pub(super) fn fit_to_original_length(
+    new_bytes: Bytes,
+    original_len: usize,
+    method: &str,
+    reason: &str,
+) -> Bytes {
+    match new_bytes.len().cmp(&original_len) {
+        std::cmp::Ordering::Less => {
+            let mut padded = Vec::with_capacity(original_len);
+            padded.extend_from_slice(&new_bytes);
+            padded.resize(original_len, b' ');
+            Bytes::from(padded)
+        }
+        std::cmp::Ordering::Equal => new_bytes,
+        std::cmp::Ordering::Greater => {
+            tracing::warn!(
+                target: "cpex.filter",
+                method = %method,
+                new_len = new_bytes.len(),
+                original_len,
+                "{reason}: rewritten body larger than original; sending without pad — \
+                 peer may see truncation or HTTP/1.1 framing desync",
+            );
+            new_bytes
+        }
+    }
+}
+
+/// Rejection emitted when `require_mcp_metadata` is on (default) and
+/// no `mcp.method` metadata was set by an upstream filter. HTTP 500
+/// because the misconfiguration is server-side, not client-side.
+fn missing_mcp_metadata_rejection() -> Rejection {
+    Rejection::status(500)
+        .with_header("Content-Type", "text/plain")
+        .with_header(VIOLATION_HEADER, "config.missing_mcp_metadata")
+        .with_body(Bytes::from_static(
+            b"cpex: no mcp.method in filter metadata. The `mcp` filter must \
+              be present in the chain and ordered before `cpex`. Set the \
+              filter's `require_mcp_metadata: false` to disable this guard \
+              for non-MCP traffic.",
+        ))
+}
+
+// -----------------------------------------------------------------------------
 // attach_delegated_tokens
 // -----------------------------------------------------------------------------
 
@@ -601,7 +722,14 @@ impl HttpFilter for CpexFilter {
 /// expects). Uses `request_headers_to_set` rather than
 /// `extra_request_headers` because authorization tokens are
 /// overwrites, not appends.
-fn attach_delegated_tokens(
+///
+/// Multiple tokens targeting the same outbound header are a
+/// configuration ambiguity — praxis's `request_headers_to_set`
+/// would otherwise let the last writer silently win, with order
+/// determined by `HashMap` iteration. Apply first-writer-wins keyed
+/// on `(outbound_header_lc, audience)`, log a warn on each skip so
+/// the operator can fix the overlapping delegators.
+pub(super) fn attach_delegated_tokens(
     ctx: &mut HttpFilterContext<'_>,
     extensions: Option<&Extensions>,
 ) -> usize {
@@ -610,16 +738,48 @@ fn attach_delegated_tokens(
         return 0;
     };
 
+    // Stable-order the tokens before we attach. `delegated_tokens` is
+    // a `HashMap`, so iteration order is non-deterministic — two
+    // tokens targeting the same outbound header would otherwise
+    // produce order-dependent results (praxis's
+    // `request_headers_to_set` is overwrite semantics). Sorting by
+    // `(outbound_header_lc, audience)` gives first-writer-wins where
+    // "first" is alphabetically lowest audience for that header.
+    let mut sorted: Vec<&_> = raw.delegated_tokens.values().collect();
+    sorted.sort_by(|a, b| {
+        a.outbound_header
+            .to_ascii_lowercase()
+            .cmp(&b.outbound_header.to_ascii_lowercase())
+            .then_with(|| a.audience.cmp(&b.audience))
+    });
+
     let mut attached_outbound: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     let mut count = 0;
-    for tok in raw.delegated_tokens.values() {
+    for tok in sorted {
+        let outbound_lc = tok.outbound_header.to_ascii_lowercase();
+        if !attached_outbound.insert(outbound_lc.clone()) {
+            // A token for this outbound header was already attached
+            // earlier in the sorted pass — refuse to overwrite. Warn
+            // loudly so an operator notices the policy ambiguity
+            // (two delegators racing for the same header is almost
+            // always a mistake in route/global config layering).
+            tracing::warn!(
+                target: "cpex.filter",
+                outbound_header = %tok.outbound_header,
+                audience = %tok.audience,
+                "skipping delegated token: another token already targets this outbound header \
+                 (first-writer-wins by audience asc); fix overlapping delegators in policy",
+            );
+            continue;
+        }
         let Ok(name) = http::header::HeaderName::try_from(tok.outbound_header.as_str()) else {
             tracing::warn!(
                 target: "cpex.filter",
                 header = %tok.outbound_header,
                 "delegated token outbound_header is not a valid HTTP header name; skipping",
             );
+            attached_outbound.remove(&outbound_lc);
             continue;
         };
         let Ok(value) = http::header::HeaderValue::try_from(format!("Bearer {}", tok.token.as_str()))
@@ -629,9 +789,9 @@ fn attach_delegated_tokens(
                 audience = %tok.audience,
                 "minted token bytes are not a valid HTTP header value; skipping",
             );
+            attached_outbound.remove(&outbound_lc);
             continue;
         };
-        attached_outbound.insert(tok.outbound_header.to_ascii_lowercase());
         ctx.request_headers_to_set.push((name, value));
         count += 1;
     }

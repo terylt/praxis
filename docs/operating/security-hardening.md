@@ -139,6 +139,7 @@ in development:
 - **Wildcard CORS origins (`"*"`)**: Allows any
   origin. Use explicit origin lists in production.
 - **Empty IP ACL allowlists**: An empty allowlist
-  permits all traffic. When possible, use principle
-  of least privilege and only allow access from the
+  permits all traffic. When possible, use the
+  principle of least privilege and only allow access
+  from the
   networks that require it.

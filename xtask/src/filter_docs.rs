@@ -203,8 +203,9 @@ struct ModuleItems {
     module_docs: Vec<String>,
     /// Local config structs found (with `Deserialize` + `deny_unknown_fields`).
     configs: Vec<ConfigStruct>,
-    /// Doc comments on public structs and filter implementation structs.
-    struct_docs: Vec<String>,
+    /// Doc comments on public structs and filter implementation structs,
+    /// paired with the struct name for priority selection.
+    struct_docs: Vec<(String, String)>,
     /// Struct definitions available for nested field rendering.
     structs: BTreeMap<String, ConfigStruct>,
     /// Enum definitions with `Deserialize` for variant rendering.
@@ -766,7 +767,7 @@ fn parse_struct(s: &syn::ItemStruct, out: &mut ModuleItems) {
         }
     }
     if !docs.is_empty() && is_filter_doc_candidate(s) {
-        out.struct_docs.push(docs);
+        out.struct_docs.push((s.ident.to_string(), docs));
     }
 }
 
@@ -780,9 +781,16 @@ fn build_filter(items: &ModuleItems, name: &str, config_type: Option<&str>) -> F
     let description_doc = items
         .struct_docs
         .iter()
-        .find(|doc| !doc.is_empty())
-        .or_else(|| items.module_docs.iter().find(|doc| !doc.is_empty()))
-        .cloned()
+        .find(|(name, doc)| !doc.is_empty() && name.ends_with("Filter"))
+        .or_else(|| items.struct_docs.iter().find(|(_, doc)| !doc.is_empty()))
+        .map(|(_, doc)| doc.clone())
+        .or_else(|| {
+            items
+                .module_docs
+                .iter()
+                .find(|doc| !doc.is_empty())
+                .cloned()
+        })
         .unwrap_or_default();
 
     let description = first_paragraph(&description_doc);
@@ -807,7 +815,11 @@ fn build_filter(items: &ModuleItems, name: &str, config_type: Option<&str>) -> F
 /// Collect all unique YAML examples from module and filter struct docs.
 fn collect_yaml_examples(items: &ModuleItems) -> Vec<String> {
     let mut examples = Vec::new();
-    for doc in items.module_docs.iter().chain(items.struct_docs.iter()) {
+    for doc in items
+        .module_docs
+        .iter()
+        .chain(items.struct_docs.iter().map(|(_, doc)| doc))
+    {
         append_unique(&mut examples, extract_yaml_examples(doc));
     }
     examples

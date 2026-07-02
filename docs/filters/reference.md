@@ -16,9 +16,9 @@ Built-in filters organized by protocol and category.
 
 | Filter | Feature | Description |
 |--------|---------|-------------|
-| [`compression`](http/payload_processing/compression.md) | - | Successfully parsed JSON-RPC body with the raw JSON value and extracted envelope. |
+| [`compression`](http/payload_processing/compression.md) | - | Enables Pingora's built-in response compression when present in a filter chain. |
 | [`json_body_field`](http/payload_processing/json_body_field.md) | - | Extracts top-level fields from a JSON request body and promotes their values to request headers using [`StreamBuffer`] mode. |
-| [`json_rpc`](http/payload_processing/json_rpc.md) | - | Header configuration for JSON-RPC metadata promotion. |
+| [`json_rpc`](http/payload_processing/json_rpc.md) | - | Extracts JSON-RPC 2.0 envelope metadata from request bodies and promotes method, id, and kind to request headers and filter results for routing. |
 
 ## HTTP / Security
 
@@ -30,7 +30,7 @@ Built-in filters organized by protocol and category.
 | [`forwarded_headers`](http/security/forwarded_headers.md) | - | Injects `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` headers into upstream requests. |
 | [`guardrails`](http/security/guardrails.md) | - | Rejects requests matching string, regex, or PII rules against headers and/or body content. |
 | [`ip_acl`](http/security/ip_acl.md) | - | IP-based access control filter. |
-| [`policy`](http/security/policy.md) | `cpex-policy-engine` | Configuration block for the experimental `policy` filter, which embeds the CPEX policy engine in-process (gated behind the `cpex-policy-engine` feature, off by default). |
+| [`policy`](http/security/policy.md) | `cpex-policy-engine` | Embeds the CPEX policy engine in-process to enforce multi-source JWT identity, APL route policy, RFC 8693 token exchange, PII scanning, audit emission, and (under `body_access: read_write`) request / response body rewriting. |
 
 ## HTTP / Traffic Management
 

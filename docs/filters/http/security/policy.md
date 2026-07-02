@@ -3,11 +3,19 @@
 
 # `policy`
 
-Configuration block for the experimental `policy` filter, which embeds the CPEX policy engine in-process (gated behind the `cpex-policy-engine` feature, off by default).
+Embeds the CPEX policy engine in-process to enforce multi-source JWT identity, APL route policy, RFC 8693 token exchange, PII scanning, audit emission, and (under `body_access: read_write`) request / response body rewriting.
 
 Requires Cargo feature: `cpex-policy-engine`.
 
 ## Configuration Notes
+
+Experimental: requires the `cpex-policy-engine` cargo feature, which is off by default. Registered under the YAML filter name `policy`.
+
+A single request can carry multiple identity sources — user JWT in `Authorization`, agent JWT in `X-Agent-Token`, workload JWT in `X-Workload-Token`, etc. Each registered identity plugin reads its own configured header and contributes to a typed `Extensions` context.
+
+On the body phase, the filter consumes protocol classifier filter metadata (from the `praxis-ai` package) to dispatch the matching CMF hook chain. APL routes (declared in the CPEX YAML) gate the tool/prompt/resource call by role, attribute, or Cedar PDP decision. `delegate(...)` steps mint audience-scoped tokens (RFC 8693) that the allow path attaches as upstream headers.
+
+`body_access: read_write` enables the JSON-RPC re-serialization round-trip so APL field mutators (`redact()`, `assign()`) rewrite the upstream request body and the downstream response.
 
 Praxis filter configs are flat: the filter's typed fields sit directly under the `- filter:` entry alongside the structural keys (`name`, `conditions`), not nested under a `config:` wrapper. See `examples/configs/security/policy.yaml` for a runnable example.
 

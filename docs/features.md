@@ -20,7 +20,8 @@
   routing with optional `Host` header and request header
   matching; longest prefix wins
 - **Load balancing** - round-robin, least-connections,
-  consistent-hash, weighted endpoints
+  consistent-hash, power-of-two-choices (P2C),
+  weighted endpoints
 - **Static responses** - return fixed status, headers,
   and body without upstream
 - **Rate limiting** - token bucket rate limiter with
@@ -201,5 +202,3 @@ deployment guidance.
 - **Rust extensions**: compile-time custom filters with
   zero overhead via the `HttpFilter`/`TcpFilter` traits
   and `register_filters!` macro.
-
-[filters]:./filters/README.md

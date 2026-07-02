@@ -322,19 +322,25 @@ pub struct TcpFilterContext<'a> {
     pub remote_addr: &'a str,
     pub local_addr: &'a str,
     pub sni: Option<&'a str>,
-    pub upstream_addr: Cow<'a, str>,
+    pub upstream_addr: Option<Cow<'a, str>>,
+    pub cluster: Option<Arc<str>>,
     pub connect_time: Instant,
     pub bytes_in: u64,
     pub bytes_out: u64,
+    pub health_registry: Option<&'a HealthRegistry>,
+    pub kv_stores: Option<&'a KvStoreRegistry>,
 }
 ```
 
 The `sni` field is populated by the TCP proxy when it peeks
 at the first bytes of a TLS connection and extracts the SNI
 hostname from the ClientHello. Filters like `sni_router` use
-this to select an upstream. The `upstream_addr` field is a
-`Cow` so filters can replace it with an owned value without
-requiring the listener config to provide a static upstream.
+this to select an upstream. The `upstream_addr` field is an
+`Option<Cow>` — `None` until a static upstream or filter
+provides one; filters can replace it with an owned value.
+The `cluster` field names the selected cluster, and
+`health_registry` / `kv_stores` provide access to shared
+runtime state.
 
 ## AnyFilter
 

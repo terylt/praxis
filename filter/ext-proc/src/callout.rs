@@ -7,14 +7,14 @@
 //! sends a single [`ProcessingRequest`], and receives a single
 //! [`ProcessingResponse`] within a configurable timeout.
 //!
-//! [`ProcessingRequest`]: praxis_proto::envoy::service::ext_proc::v3::ProcessingRequest
-//! [`ProcessingResponse`]: praxis_proto::envoy::service::ext_proc::v3::ProcessingResponse
+//! [`ProcessingRequest`]: crate::proto::envoy::service::ext_proc::v3::ProcessingRequest
+//! [`ProcessingResponse`]: crate::proto::envoy::service::ext_proc::v3::ProcessingResponse
 
 use std::time::Duration;
 
 use futures::stream;
 use praxis_filter::{FilterAction, FilterError, HttpFilterContext};
-use praxis_proto::envoy::service::ext_proc::v3::{
+use crate::proto::envoy::service::ext_proc::v3::{
     ProcessingRequest, ProcessingResponse, external_processor_client::ExternalProcessorClient, processing_request,
     processing_response,
 };

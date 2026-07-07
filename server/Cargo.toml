@@ -44,5 +44,4 @@ tempfile = { workspace = true }
 
 [features]
 default = []
-ext-proc = ["praxis-filter/ext-proc"]
 cpex-policy-engine = ["praxis-filter/cpex-policy-engine"]

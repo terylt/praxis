@@ -1,12 +1,18 @@
-//! Protobuf and gRPC definitions for the Envoy external processing protocol.
-//!
-//! This crate compiles vendored `.proto` files from the Envoy project into
-//! Rust types with [`tonic`] gRPC client and server stubs.
+// SPDX-License-Identifier: MIT AND Apache-2.0 AND BSD-3-Clause
+// Copyright (c) 2024 Praxis Contributors
+// Vendored Envoy protos: Apache-2.0 (see NOTICE)
+// Vendored Google protos: BSD-3-Clause (see NOTICE)
 
-pub mod envoy {
-    pub mod service {
-        pub mod common {
+//! Protobuf and gRPC definitions for the Envoy external processing
+//! protocol.
+//!
+//! Compiled from vendored `.proto` files at build time.
+
+pub(crate) mod envoy {
+    pub(crate) mod service {
+        pub(crate) mod common {
             #[allow(
+                dead_code,
                 missing_docs,
                 unreachable_pub,
                 trivial_casts,
@@ -24,8 +30,9 @@ pub mod envoy {
             }
         }
 
-        pub mod ext_proc {
+        pub(crate) mod ext_proc {
             #[allow(
+                dead_code,
                 missing_docs,
                 unreachable_pub,
                 trivial_casts,

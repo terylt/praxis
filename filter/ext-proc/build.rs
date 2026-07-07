@@ -1,3 +1,5 @@
+//! Proto compilation build script for the ext-proc crate.
+
 /// Compile vendored Envoy `.proto` files into Rust types with tonic gRPC stubs.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cwd = std::env::current_dir()?;

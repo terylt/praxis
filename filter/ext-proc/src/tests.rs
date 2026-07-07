@@ -23,9 +23,12 @@ use std::{
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode, Uri};
 use praxis_filter::parse_filter_config;
-use praxis_proto::envoy::service::{
+use crate::proto::envoy::service::{
     common::v3::{HeaderValue, HeaderValueOption, HttpStatus},
-    ext_proc::v3::{CommonResponse, HeaderMutation, HeadersResponse, ImmediateResponse},
+    ext_proc::v3::{
+        CommonResponse, HeaderMutation, HeadersResponse, HttpBody, HttpHeaders, HttpTrailers,
+        ImmediateResponse,
+    },
 };
 
 use super::*;
@@ -999,7 +1002,7 @@ fn apply_request_header_mutation_removal_skips_pseudo_headers() {
 
 #[test]
 fn apply_request_header_mutation_overwrite_uses_set_queue() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let mut req = make_request(Method::GET, "/");
     req.headers.insert("x-existing", "old".parse().unwrap());
@@ -1037,7 +1040,7 @@ fn apply_request_header_mutation_overwrite_uses_set_queue() {
 
 #[test]
 fn apply_request_header_mutation_overwrite_if_exists_skips_absent() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let req = make_request(Method::GET, "/");
     let mut ctx = make_ctx(&req);
@@ -1062,7 +1065,7 @@ fn apply_request_header_mutation_overwrite_if_exists_skips_absent() {
 
 #[test]
 fn apply_request_header_mutation_overwrite_if_exists_replaces_present() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let mut req = make_request(Method::GET, "/");
     req.headers.insert("x-existing", "old".parse().unwrap());
@@ -1090,7 +1093,7 @@ fn apply_request_header_mutation_overwrite_if_exists_replaces_present() {
 
 #[test]
 fn apply_request_header_mutation_add_if_absent_skips_existing() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let mut req = make_request(Method::GET, "/");
     req.headers.insert("x-existing", "old".parse().unwrap());
@@ -1112,7 +1115,7 @@ fn apply_request_header_mutation_add_if_absent_skips_existing() {
 
 #[test]
 fn apply_request_header_mutation_add_if_absent_adds_missing() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let req = make_request(Method::GET, "/");
     let mut ctx = make_ctx(&req);
@@ -1244,7 +1247,7 @@ fn apply_response_header_mutation_noop_when_no_response() {
 
 #[test]
 fn response_header_default_action_appends() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let req = make_request(Method::GET, "/");
     let mut resp = make_response();
@@ -1277,7 +1280,7 @@ fn response_header_default_action_appends() {
 
 #[test]
 fn response_header_overwrite_action_replaces() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let req = make_request(Method::GET, "/");
     let mut resp = make_response();
@@ -1389,7 +1392,7 @@ fn response_header_both_unset_defaults_to_append() {
 
 #[test]
 fn response_header_overwrite_if_exists_replaces_present() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let req = make_request(Method::GET, "/");
     let mut resp = make_response();
@@ -1421,7 +1424,7 @@ fn response_header_overwrite_if_exists_replaces_present() {
 
 #[test]
 fn response_header_overwrite_if_exists_skips_absent() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let req = make_request(Method::GET, "/");
     let mut resp = make_response();
@@ -1449,7 +1452,7 @@ fn response_header_overwrite_if_exists_skips_absent() {
 
 #[test]
 fn response_header_add_if_absent_adds_missing() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let req = make_request(Method::GET, "/");
     let mut resp = make_response();
@@ -1475,7 +1478,7 @@ fn response_header_add_if_absent_adds_missing() {
 
 #[test]
 fn response_header_add_if_absent_skips_existing() {
-    use praxis_proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
+    use crate::proto::envoy::service::common::v3::header_value_option::HeaderAppendAction;
 
     let req = make_request(Method::GET, "/");
     let mut resp = make_response();
@@ -2133,7 +2136,7 @@ fn minimal_config() -> ExtProcConfig {
 use std::{net::SocketAddr, pin::Pin};
 
 use async_trait::async_trait;
-use praxis_proto::envoy::service::ext_proc::v3::{
+use crate::proto::envoy::service::ext_proc::v3::{
     BodyResponse, ProcessingRequest, ProcessingResponse, ProtocolConfiguration, TrailersResponse,
     external_processor_server::{ExternalProcessor, ExternalProcessorServer},
     processing_request, processing_response,
@@ -2512,7 +2515,7 @@ impl ExternalProcessor for DuplexMockProcessor {
                     }
                     let header_resp = build_add_header_response(&header_msg, &header_name, &header_value);
                     drop(tx.send(Ok(header_resp)).await);
-                    use praxis_proto::envoy::service::ext_proc::v3::{
+                    use crate::proto::envoy::service::ext_proc::v3::{
                         BodyMutation, CommonResponse, StreamedBodyResponse, body_mutation,
                     };
                     let body_resp = ProcessingResponse {
@@ -2569,7 +2572,7 @@ impl ExternalProcessor for DuplexMockProcessor {
 
                     for (i, chunk) in chunks.iter().enumerate() {
                         let is_last = i == chunks.len() - 1;
-                        use praxis_proto::envoy::service::ext_proc::v3::{
+                        use crate::proto::envoy::service::ext_proc::v3::{
                             BodyMutation, CommonResponse, StreamedBodyResponse, body_mutation,
                         };
                         let body_resp = ProcessingResponse {
@@ -2690,8 +2693,8 @@ async fn start_duplex_processor(behavior: DuplexBehavior) -> (SocketAddr, MockSe
 }
 
 fn make_request_headers() -> processing_request::Request {
-    processing_request::Request::RequestHeaders(praxis_proto::envoy::service::ext_proc::v3::HttpHeaders {
-        headers: Some(praxis_proto::envoy::service::ext_proc::v3::HeaderMap {
+    processing_request::Request::RequestHeaders(HttpHeaders {
+        headers: Some(proto::envoy::service::ext_proc::v3::HeaderMap {
             headers: vec![HeaderValue {
                 key: ":method".to_owned(),
                 value: "GET".to_owned(),
@@ -2703,15 +2706,15 @@ fn make_request_headers() -> processing_request::Request {
 }
 
 fn make_request_body(body: &[u8], end_of_stream: bool) -> processing_request::Request {
-    processing_request::Request::RequestBody(praxis_proto::envoy::service::ext_proc::v3::HttpBody {
+    processing_request::Request::RequestBody(HttpBody {
         body: body.to_vec(),
         end_of_stream,
     })
 }
 
 fn make_response_headers() -> processing_request::Request {
-    processing_request::Request::ResponseHeaders(praxis_proto::envoy::service::ext_proc::v3::HttpHeaders {
-        headers: Some(praxis_proto::envoy::service::ext_proc::v3::HeaderMap {
+    processing_request::Request::ResponseHeaders(HttpHeaders {
+        headers: Some(proto::envoy::service::ext_proc::v3::HeaderMap {
             headers: vec![HeaderValue {
                 key: ":status".to_owned(),
                 value: "200".to_owned(),
@@ -2723,8 +2726,8 @@ fn make_response_headers() -> processing_request::Request {
 }
 
 fn make_request_trailers() -> processing_request::Request {
-    processing_request::Request::RequestTrailers(praxis_proto::envoy::service::ext_proc::v3::HttpTrailers {
-        trailers: Some(praxis_proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
+    processing_request::Request::RequestTrailers(HttpTrailers {
+        trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
     })
 }
 
@@ -3372,8 +3375,8 @@ async fn duplex_concurrent_exchanges_no_crosstalk() {
             let mut exchange = ExtProcExchange::open(channel, &default_exchange_config()).unwrap();
             let unique_id = format!("exchange-{i}");
             let headers =
-                processing_request::Request::RequestHeaders(praxis_proto::envoy::service::ext_proc::v3::HttpHeaders {
-                    headers: Some(praxis_proto::envoy::service::ext_proc::v3::HeaderMap {
+                processing_request::Request::RequestHeaders(HttpHeaders {
+                    headers: Some(proto::envoy::service::ext_proc::v3::HeaderMap {
                         headers: vec![
                             HeaderValue {
                                 key: ":method".to_owned(),
@@ -3537,7 +3540,7 @@ async fn duplex_response_body_round_trip() {
     exchange.send(make_response_headers()).await.unwrap();
     let _resp_hdr = exchange.receive().await.unwrap();
 
-    let resp_body = processing_request::Request::ResponseBody(praxis_proto::envoy::service::ext_proc::v3::HttpBody {
+    let resp_body = processing_request::Request::ResponseBody(HttpBody {
         body: b"response body data".to_vec(),
         end_of_stream: true,
     });
@@ -3778,8 +3781,8 @@ async fn duplex_request_trailers_send_and_classify() {
     let _hdr = exchange.receive().await.unwrap();
 
     let trailers =
-        processing_request::Request::RequestTrailers(praxis_proto::envoy::service::ext_proc::v3::HttpTrailers {
-            trailers: Some(praxis_proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
+        processing_request::Request::RequestTrailers(HttpTrailers {
+            trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
         });
     exchange.send(trailers).await.unwrap();
     let event = exchange.receive().await.unwrap();
@@ -4111,8 +4114,8 @@ async fn duplex_response_trailers_send_and_classify() {
     let _resp_hdr = exchange.receive().await.unwrap();
 
     let trailers =
-        processing_request::Request::ResponseTrailers(praxis_proto::envoy::service::ext_proc::v3::HttpTrailers {
-            trailers: Some(praxis_proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
+        processing_request::Request::ResponseTrailers(HttpTrailers {
+            trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
         });
     exchange.send(trailers).await.unwrap();
     let event = exchange.receive().await.unwrap();
@@ -4312,7 +4315,7 @@ async fn duplex_override_ignored_in_full_duplex() {
                 drop(tx.send(Ok(header_resp)).await);
 
                 let _body = stream.message().await.unwrap().unwrap();
-                use praxis_proto::envoy::service::ext_proc::v3::{
+                use crate::proto::envoy::service::ext_proc::v3::{
                     BodyMutation, CommonResponse, StreamedBodyResponse, body_mutation,
                 };
                 let body_resp = ProcessingResponse {
@@ -4737,7 +4740,7 @@ async fn duplex_full_duplex_trailers_while_deferred() {
                             ..Default::default()
                         },
                         Some(processing_request::Request::RequestBody(_)) => {
-                            use praxis_proto::envoy::service::ext_proc::v3::{
+                            use crate::proto::envoy::service::ext_proc::v3::{
                                 BodyMutation, CommonResponse, StreamedBodyResponse, body_mutation,
                             };
                             ProcessingResponse {
@@ -4797,8 +4800,8 @@ async fn duplex_full_duplex_trailers_while_deferred() {
     exchange.send(make_request_body(b"chunk2", false)).await.unwrap();
 
     let trailers =
-        processing_request::Request::RequestTrailers(praxis_proto::envoy::service::ext_proc::v3::HttpTrailers {
-            trailers: Some(praxis_proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
+        processing_request::Request::RequestTrailers(HttpTrailers {
+            trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
         });
     exchange.send(trailers).await.unwrap();
 
@@ -4852,7 +4855,7 @@ async fn duplex_streamed_body_response_in_non_fd_rejected() {
                 drop(tx.send(Ok(header_resp)).await);
 
                 let _body = stream.message().await.unwrap().unwrap();
-                use praxis_proto::envoy::service::ext_proc::v3::{
+                use crate::proto::envoy::service::ext_proc::v3::{
                     BodyMutation, CommonResponse, StreamedBodyResponse, body_mutation,
                 };
                 let body_resp = ProcessingResponse {
@@ -5008,7 +5011,7 @@ async fn duplex_request_body_response_without_body_send_rejected() {
                     ..Default::default()
                 };
                 drop(tx.send(Ok(header_resp)).await);
-                use praxis_proto::envoy::service::ext_proc::v3::{
+                use crate::proto::envoy::service::ext_proc::v3::{
                     BodyMutation, CommonResponse, StreamedBodyResponse, body_mutation,
                 };
                 let body_resp = ProcessingResponse {
@@ -5086,7 +5089,7 @@ async fn duplex_request_trailer_response_without_trailer_send_rejected() {
                 drop(tx.send(Ok(header_resp)).await);
 
                 let _body = stream.message().await.unwrap().unwrap();
-                use praxis_proto::envoy::service::ext_proc::v3::{
+                use crate::proto::envoy::service::ext_proc::v3::{
                     BodyMutation, CommonResponse, StreamedBodyResponse, body_mutation,
                 };
                 let body_resp = ProcessingResponse {
@@ -5182,7 +5185,7 @@ async fn duplex_response_body_response_without_body_send_rejected() {
                 };
                 drop(tx.send(Ok(resp_hdr_resp)).await);
 
-                use praxis_proto::envoy::service::ext_proc::v3::{
+                use crate::proto::envoy::service::ext_proc::v3::{
                     BodyMutation, CommonResponse, StreamedBodyResponse, body_mutation,
                 };
                 let body_resp = ProcessingResponse {
@@ -6146,7 +6149,7 @@ async fn duplex_cross_direction_started_non_fd_duplicate_body_rejected() {
 
     exchange
         .send(processing_request::Request::ResponseBody(
-            praxis_proto::envoy::service::ext_proc::v3::HttpBody {
+            HttpBody {
                 body: b"resp_body".to_vec(),
                 end_of_stream: false,
             },

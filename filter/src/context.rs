@@ -13,6 +13,17 @@ use praxis_core::{
 use crate::{body::BodyMode, extensions::RequestExtensions, pipeline::body::merge_body_mode, results::FilterResultSet};
 
 // -----------------------------------------------------------------------------
+// Constants
+// -----------------------------------------------------------------------------
+
+/// Maximum entries allowed in the general `filter_metadata` map.
+///
+/// Individual keys and values are already size-bounded (64 / 256
+/// bytes), but without an entry count cap a filter chain could
+/// insert thousands of unique keys per request.
+const MAX_METADATA_ENTRIES: usize = 128;
+
+// -----------------------------------------------------------------------------
 // HttpFilterContext
 // -----------------------------------------------------------------------------
 
@@ -224,6 +235,14 @@ impl HttpFilterContext<'_> {
         }
         if value.len() > 256 {
             tracing::warn!(key = %key, value_len = value.len(), "metadata value rejected (max 256 bytes)");
+            return;
+        }
+        if !self.filter_metadata.contains_key(&key) && self.filter_metadata.len() >= MAX_METADATA_ENTRIES {
+            tracing::warn!(
+                key = %key,
+                entries = self.filter_metadata.len(),
+                "metadata entry rejected (max {MAX_METADATA_ENTRIES} entries)"
+            );
             return;
         }
         self.filter_metadata.insert(key, value);
@@ -684,6 +703,47 @@ mod tests {
         let long_value = "v".repeat(257);
         ctx.set_metadata("key", long_value.as_str());
         assert!(ctx.get_metadata("key").is_none(), "257-byte value should be rejected");
+    }
+
+    #[test]
+    fn set_metadata_rejects_when_entry_limit_reached() {
+        let req = crate::test_utils::make_request(Method::GET, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        for i in 0..MAX_METADATA_ENTRIES {
+            ctx.set_metadata(format!("key.{i}"), "value");
+        }
+        assert_eq!(
+            ctx.filter_metadata.len(),
+            MAX_METADATA_ENTRIES,
+            "should accept exactly {MAX_METADATA_ENTRIES} entries"
+        );
+
+        ctx.set_metadata("overflow", "value");
+        assert!(
+            ctx.get_metadata("overflow").is_none(),
+            "entry beyond limit should be rejected"
+        );
+    }
+
+    #[test]
+    fn set_metadata_allows_overwrite_at_limit() {
+        let req = crate::test_utils::make_request(Method::GET, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        for i in 0..MAX_METADATA_ENTRIES {
+            ctx.set_metadata(format!("key.{i}"), "old");
+        }
+
+        ctx.set_metadata("key.0", "new");
+        assert_eq!(
+            ctx.get_metadata("key.0"),
+            Some("new"),
+            "overwriting existing key at limit should succeed"
+        );
+        assert_eq!(
+            ctx.filter_metadata.len(),
+            MAX_METADATA_ENTRIES,
+            "overwrite should not increase entry count"
+        );
     }
 
     #[test]

@@ -50,7 +50,17 @@ async fn run_response_pipeline(
     resp: &mut praxis_filter::Response,
 ) -> Result<(std::result::Result<FilterAction, praxis_filter::FilterError>, bool)> {
     let baseline_response_body_mode = ctx.response_body_mode;
-    let (r, headers_modified, response_body_mode, cluster, extensions, filter_metadata, filter_state, executed_indices, body_done) = {
+    let (
+        r,
+        headers_modified,
+        response_body_mode,
+        cluster,
+        extensions,
+        filter_metadata,
+        filter_state,
+        executed_indices,
+        body_done,
+    ) = {
         let mut fctx = ctx.filter_context_for(pipeline, Some(resp)).ok_or_else(|| {
             pingora_core::Error::explain(
                 pingora_core::ErrorType::InternalError,

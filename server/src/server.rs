@@ -512,8 +512,10 @@ mod tests {
 
     #[test]
     fn init_runtime_limits_with_memory_does_not_panic() {
-        let mut runtime = praxis_core::config::RuntimeConfig::default();
-        runtime.max_memory_bytes = Some(1_073_741_824);
+        let runtime = praxis_core::config::RuntimeConfig {
+            max_memory_bytes: Some(1_073_741_824),
+            ..Default::default()
+        };
         init_runtime_limits(&runtime);
     }
 

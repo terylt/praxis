@@ -627,7 +627,7 @@ filter_chains:
     #[test]
     fn is_stateful_detects_nested_in_branch_chains() {
         let entry: praxis_core::config::FilterEntry = serde_yaml::from_str(
-            r#"
+            "\
 filter: router
 branch_chains:
   - name: branch1
@@ -635,7 +635,7 @@ branch_chains:
       - name: inline1
         filters:
           - filter: rate_limit
-"#,
+",
         )
         .unwrap();
         assert!(
@@ -647,7 +647,7 @@ branch_chains:
     #[test]
     fn is_stateful_ignores_non_stateful_in_branch_chains() {
         let entry: praxis_core::config::FilterEntry = serde_yaml::from_str(
-            r#"
+            "\
 filter: router
 branch_chains:
   - name: branch1
@@ -655,7 +655,7 @@ branch_chains:
       - name: inline1
         filters:
           - filter: static_response
-"#,
+",
         )
         .unwrap();
         assert!(

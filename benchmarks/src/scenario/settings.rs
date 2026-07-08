@@ -99,7 +99,7 @@ mod tests {
     fn workload_params_small_requests() {
         let params = workload_params(&Workload::SmallRequests { concurrency: 64 });
         assert_eq!(
-            params.get("concurrency").and_then(|v| v.as_u64()),
+            params.get("concurrency").and_then(serde_json::Value::as_u64),
             Some(64),
             "SmallRequests should emit concurrency"
         );
@@ -110,7 +110,7 @@ mod tests {
     fn workload_params_large_payload() {
         let params = workload_params(&Workload::LargePayload { body_size: 8192 });
         assert_eq!(
-            params.get("body_size").and_then(|v| v.as_u64()),
+            params.get("body_size").and_then(serde_json::Value::as_u64),
             Some(8192),
             "LargePayload should emit body_size"
         );
@@ -124,12 +124,12 @@ mod tests {
             body_size: 4096,
         });
         assert_eq!(
-            params.get("concurrency").and_then(|v| v.as_u64()),
+            params.get("concurrency").and_then(serde_json::Value::as_u64),
             Some(50),
             "should emit concurrency"
         );
         assert_eq!(
-            params.get("body_size").and_then(|v| v.as_u64()),
+            params.get("body_size").and_then(serde_json::Value::as_u64),
             Some(4096),
             "should emit body_size"
         );
@@ -140,7 +140,7 @@ mod tests {
     fn workload_params_high_connection_count() {
         let params = workload_params(&Workload::HighConnectionCount { connections: 5000 });
         assert_eq!(
-            params.get("connections").and_then(|v| v.as_u64()),
+            params.get("connections").and_then(serde_json::Value::as_u64),
             Some(5000),
             "HighConnectionCount should emit connections"
         );
@@ -155,17 +155,17 @@ mod tests {
             step: 500,
         });
         assert_eq!(
-            params.get("start_qps").and_then(|v| v.as_u64()),
+            params.get("start_qps").and_then(serde_json::Value::as_u64),
             Some(100),
             "Ramp should emit start_qps"
         );
         assert_eq!(
-            params.get("end_qps").and_then(|v| v.as_u64()),
+            params.get("end_qps").and_then(serde_json::Value::as_u64),
             Some(10_000),
             "Ramp should emit end_qps"
         );
         assert_eq!(
-            params.get("step").and_then(|v| v.as_u64()),
+            params.get("step").and_then(serde_json::Value::as_u64),
             Some(500),
             "Ramp should emit step"
         );
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(settings.duration_secs, 60, "duration_secs should match scenario");
         assert_eq!(settings.runs, 3, "runs should match scenario");
         assert_eq!(
-            settings.workload.get("concurrency").and_then(|v| v.as_u64()),
+            settings.workload.get("concurrency").and_then(serde_json::Value::as_u64),
             Some(200),
             "workload params should be populated"
         );

@@ -279,11 +279,7 @@ impl PolicyFilter {
         meta.entity_name = Some(entity_name.to_owned());
         ext.meta = Some(Arc::new(meta));
 
-        if let Some(session_id) = headers
-            .get("x-session-id")
-            .filter(|value| !value.is_empty())
-            .cloned()
-        {
+        if let Some(session_id) = headers.get("x-session-id").filter(|value| !value.is_empty()).cloned() {
             let mut agent = ext.agent.as_ref().map(|arc| (**arc).clone()).unwrap_or_default();
             agent.session_id = Some(session_id);
             ext.agent = Some(Arc::new(agent));

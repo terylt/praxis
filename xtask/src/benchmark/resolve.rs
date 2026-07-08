@@ -155,7 +155,11 @@ mod tests {
     #[test]
     fn resolve_proxy_names_praxis_always_first() {
         let names = resolve_proxy_names(&["nginx".into(), "envoy".into()]);
-        assert_eq!(names[0], "praxis", "praxis should always be the first entry");
+        assert_eq!(
+            names.first().map(String::as_str),
+            Some("praxis"),
+            "praxis should always be the first entry"
+        );
     }
 
     #[test]

@@ -372,3 +372,194 @@ fn resolve_append_action(
         HeaderAppendAction::OverwriteIfExistsOrAdd
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
+#[allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
+mod tests {
+    use super::*;
+    use crate::proto::envoy::service::common::v3::{HttpStatus, header_value_option::HeaderAppendAction};
+
+    // -----------------------------------------------------------------------
+    // header_value_string
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn header_value_string_prefers_raw_value() {
+        let hv = HeaderValue {
+            key: "x-test".to_owned(),
+            value: "fallback".to_owned(),
+            raw_value: b"primary".to_vec(),
+        };
+        assert_eq!(
+            header_value_string(&hv),
+            "primary",
+            "should prefer raw_value when non-empty"
+        );
+    }
+
+    #[test]
+    fn header_value_string_falls_back_to_value() {
+        let hv = HeaderValue {
+            key: "x-test".to_owned(),
+            value: "fallback".to_owned(),
+            raw_value: Vec::new(),
+        };
+        assert_eq!(
+            header_value_string(&hv),
+            "fallback",
+            "should use value when raw_value is empty"
+        );
+    }
+
+    #[test]
+    fn header_value_string_non_utf8_raw_value() {
+        let hv = HeaderValue {
+            key: "x-bin".to_owned(),
+            value: String::new(),
+            raw_value: vec![0xFF, 0xFE],
+        };
+        let s = header_value_string(&hv);
+        assert!(
+            s.contains('\u{FFFD}'),
+            "non-UTF-8 bytes should produce replacement chars, got: {s}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // is_pseudo_header
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pseudo_header_detected() {
+        assert!(is_pseudo_header(":method"), ":method is a pseudo-header");
+        assert!(is_pseudo_header(":path"), ":path is a pseudo-header");
+    }
+
+    #[test]
+    fn regular_header_not_pseudo() {
+        assert!(!is_pseudo_header("host"), "host is not a pseudo-header");
+        assert!(!is_pseudo_header("x-custom"), "x-custom is not a pseudo-header");
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_append_action
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_append_action_default_is_append() {
+        let hvo = HeaderValueOption {
+            header: None,
+            append: None,
+            append_action: 0,
+        };
+        let action = resolve_append_action(&hvo);
+        assert_eq!(
+            action,
+            HeaderAppendAction::AppendIfExistsOrAdd,
+            "default should be AppendIfExistsOrAdd"
+        );
+    }
+
+    #[test]
+    fn resolve_append_action_explicit_overwrite() {
+        let hvo = HeaderValueOption {
+            header: None,
+            append: None,
+            append_action: HeaderAppendAction::OverwriteIfExistsOrAdd as i32,
+        };
+        let action = resolve_append_action(&hvo);
+        assert_eq!(
+            action,
+            HeaderAppendAction::OverwriteIfExistsOrAdd,
+            "explicit overwrite should be OverwriteIfExistsOrAdd"
+        );
+    }
+
+    #[test]
+    fn resolve_append_action_deprecated_append_false() {
+        let hvo = HeaderValueOption {
+            header: None,
+            append: Some(false),
+            append_action: 0,
+        };
+        let action = resolve_append_action(&hvo);
+        assert_eq!(
+            action,
+            HeaderAppendAction::OverwriteIfExistsOrAdd,
+            "deprecated append=false should map to OverwriteIfExistsOrAdd"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // immediate_to_rejection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn immediate_to_rejection_default_status_200() {
+        let imm = ImmediateResponse {
+            status: None,
+            headers: None,
+            body: String::new(),
+            grpc_status: None,
+            details: String::new(),
+        };
+        let action = immediate_to_rejection(&imm);
+        assert!(
+            matches!(&action, FilterAction::Reject(r) if r.status == 200),
+            "missing status should default to 200"
+        );
+    }
+
+    #[test]
+    fn immediate_to_rejection_custom_status() {
+        let imm = ImmediateResponse {
+            status: Some(HttpStatus { code: 403 }),
+            headers: None,
+            body: String::new(),
+            grpc_status: None,
+            details: String::new(),
+        };
+        let action = immediate_to_rejection(&imm);
+        assert!(
+            matches!(&action, FilterAction::Reject(r) if r.status == 403),
+            "should use the configured status code"
+        );
+    }
+
+    #[test]
+    fn immediate_to_rejection_negative_status_falls_back_to_500() {
+        let imm = ImmediateResponse {
+            status: Some(HttpStatus { code: -1 }),
+            headers: None,
+            body: String::new(),
+            grpc_status: None,
+            details: String::new(),
+        };
+        let action = immediate_to_rejection(&imm);
+        assert!(
+            matches!(&action, FilterAction::Reject(r) if r.status == 500),
+            "negative status should fall back to 500"
+        );
+    }
+
+    #[test]
+    fn immediate_to_rejection_with_body() {
+        let imm = ImmediateResponse {
+            status: Some(HttpStatus { code: 429 }),
+            headers: None,
+            body: "rate limited".to_owned(),
+            grpc_status: None,
+            details: String::new(),
+        };
+        let action = immediate_to_rejection(&imm);
+        assert!(
+            matches!(&action, FilterAction::Reject(r) if r.body.as_deref() == Some(b"rate limited".as_slice())),
+            "rejection should include the body"
+        );
+    }
+}

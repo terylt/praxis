@@ -205,8 +205,10 @@ access. The default configuration binds to
 
 ### TCP Listeners
 
-TCP listeners set `protocol: tcp` and require an `upstream`
-address. Filter chains are optional for TCP listeners.
+TCP listeners set `protocol: tcp` and require either a
+static `upstream` address or a `cluster` name for load-
+balanced routing. Filter chains are optional. The two
+fields are mutually exclusive.
 
 ```yaml
 listeners:
@@ -435,6 +437,11 @@ runtime:
   upstream connections kept per thread. `Option<usize>`,
   defaults to `Some(64)`. Set to `null` to disable
   keepalive pooling.
+- `max_connections`: process-wide maximum concurrent
+  connections across all listeners. When set, new
+  connections beyond this limit are rejected.
+  `Option<u32>`, defaults to `None` (disabled).
+  Distinct from per-listener `max_connections`.
 - `max_memory_bytes`: process-wide RSS memory limit for
   load shedding. When set, the proxy monitors resident
   memory and rejects new requests with `503 Service
@@ -447,6 +454,7 @@ runtime:
   work_stealing: true
   global_queue_interval: 61
   upstream_keepalive_pool_size: 64
+  max_connections: 10000         # process-wide limit
   max_memory_bytes: 1073741824   # 1 GiB
 ```
 

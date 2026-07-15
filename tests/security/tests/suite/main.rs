@@ -37,6 +37,7 @@
     reason = "test code"
 )]
 
+mod cors_validation;
 mod filter_leakage;
 mod forwarded_headers;
 mod header_injection;
@@ -44,3 +45,4 @@ mod host_header;
 mod info_leakage;
 mod ip_acl;
 mod request_smuggling;
+mod ssrf_validation;

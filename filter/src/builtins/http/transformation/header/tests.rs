@@ -612,6 +612,93 @@ request_add:
     );
 }
 
+#[test]
+fn from_config_rejects_hop_by_hop_in_response_add() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+response_add:
+  - name: transfer-encoding
+    value: chunked
+"#,
+    )
+    .unwrap();
+    let err = expect_config_err(&yaml);
+    assert!(
+        err.contains("hop-by-hop header 'transfer-encoding'"),
+        "should reject hop-by-hop header in response_add: {err}"
+    );
+}
+
+#[test]
+fn from_config_rejects_hop_by_hop_in_response_set() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+response_set:
+  - name: connection
+    value: keep-alive
+"#,
+    )
+    .unwrap();
+    let err = expect_config_err(&yaml);
+    assert!(
+        err.contains("hop-by-hop header 'connection'"),
+        "should reject hop-by-hop header in response_set: {err}"
+    );
+}
+
+#[test]
+fn from_config_rejects_all_response_hop_by_hop_headers() {
+    let blocked = [
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    ];
+    for header in blocked {
+        let yaml: serde_yaml::Value =
+            serde_yaml::from_str(&format!("response_add:\n  - name: {header}\n    value: test\n")).unwrap();
+        assert!(
+            HeaderFilter::from_config(&yaml).is_err(),
+            "should reject hop-by-hop header '{header}' in response_add"
+        );
+    }
+}
+
+#[test]
+fn from_config_allows_hop_by_hop_in_response_remove() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+response_remove:
+  - transfer-encoding
+  - connection
+"#,
+    )
+    .unwrap();
+    assert!(
+        HeaderFilter::from_config(&yaml).is_ok(),
+        "removing hop-by-hop headers from responses should be allowed"
+    );
+}
+
+#[test]
+fn from_config_allows_hop_by_hop_in_request_set() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+request_set:
+  - name: connection
+    value: keep-alive
+"#,
+    )
+    .unwrap();
+    assert!(
+        HeaderFilter::from_config(&yaml).is_ok(),
+        "hop-by-hop headers in request operations should not be blocked"
+    );
+}
+
 // -----------------------------------------------------------------------------
 // Test Utilities
 // -----------------------------------------------------------------------------

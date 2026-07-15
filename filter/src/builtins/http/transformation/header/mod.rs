@@ -25,8 +25,8 @@ use serde::Deserialize;
 use tracing::trace;
 
 use self::ops::{
-    append_headers, parse_header_name_with_raw_value, parse_header_names, parse_header_pairs, remove_headers,
-    set_headers,
+    append_headers, parse_header_name_with_raw_value, parse_header_names, parse_header_pairs,
+    reject_response_hop_by_hop, remove_headers, set_headers,
 };
 use crate::{
     FilterAction, FilterError,
@@ -158,8 +158,10 @@ impl HeaderFilter {
         let request_remove = parse_header_names(cfg.request_remove, "request_remove")?;
         let request_set = parse_header_pairs(cfg.request_set, "request_set")?;
         let response_add = parse_header_pairs(cfg.response_add, "response_add")?;
+        reject_response_hop_by_hop(&response_add, "response_add")?;
         let response_remove = parse_header_names(cfg.response_remove, "response_remove")?;
         let response_set = parse_header_pairs(cfg.response_set, "response_set")?;
+        reject_response_hop_by_hop(&response_set, "response_set")?;
 
         Ok(Box::new(Self {
             request_add,

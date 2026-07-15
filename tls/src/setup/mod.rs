@@ -219,36 +219,92 @@ fn maybe_filter_provider(
         return Ok(provider);
     };
 
-    let allowed: Vec<_> = ids.iter().map(CipherSuiteId::to_rustls).collect();
+    warn_cipher_suite_ordering(ids);
 
-    let filtered: Vec<_> = provider
-        .cipher_suites
+    let filtered: Vec<_> = ids
         .iter()
-        .filter(|s| allowed.iter().any(|a| a.suite() == s.suite()))
-        .copied()
+        .filter_map(|id| {
+            let target = id.to_rustls().suite();
+            provider.cipher_suites.iter().find(|s| s.suite() == target).copied()
+        })
         .collect();
 
     if filtered.is_empty() {
         return Err(TlsError::EmptyCipherSuites);
     }
-    if filtered.len() < ids.len() {
-        tracing::warn!(
-            requested = ids.len(),
-            matched = filtered.len(),
-            "some requested cipher suites were not found in the provider"
-        );
-    } else {
-        tracing::info!(
-            requested = ids.len(),
-            matched = filtered.len(),
-            "cipher suite filter applied"
-        );
-    }
+    log_cipher_filter_result(ids.len(), filtered.len());
 
     Ok(Arc::new(rustls::crypto::CryptoProvider {
         cipher_suites: filtered,
         ..(*provider).clone()
     }))
+}
+
+// -----------------------------------------------------------------------------
+// Cipher Suite Ordering
+// -----------------------------------------------------------------------------
+
+/// Log the result of cipher suite filtering.
+fn log_cipher_filter_result(requested: usize, matched: usize) {
+    if matched < requested {
+        tracing::warn!(
+            requested,
+            matched,
+            "some requested cipher suites were not found in the provider"
+        );
+    } else {
+        tracing::info!(requested, matched, "cipher suite filter applied");
+    }
+}
+
+/// Emit a warning when the configured cipher suite order places a
+/// weaker cipher before a stronger one.
+fn warn_cipher_suite_ordering(suites: &[CipherSuiteId]) {
+    if let Some((weaker, stronger)) = find_weak_before_strong(suites) {
+        tracing::warn!(
+            ?weaker,
+            ?stronger,
+            "cipher suite ordering places a weaker cipher before a stronger one; \
+             consider reordering strongest suites first"
+        );
+    }
+}
+
+/// Strength tier for a cipher suite's symmetric algorithm.
+///
+/// Higher values indicate stronger ciphers. Used to detect when
+/// a weaker cipher is ordered before a stronger one in the
+/// operator's configuration.
+///
+/// - Tier 2: AES-256-GCM (256-bit key, highest security margin)
+/// - Tier 1: ChaCha20-Poly1305 (256-bit key, strong alternative)
+/// - Tier 0: AES-128-GCM (128-bit key, adequate but lower margin)
+fn cipher_strength_tier(suite: &CipherSuiteId) -> u8 {
+    match suite {
+        CipherSuiteId::Tls13Aes256GcmSha384
+        | CipherSuiteId::Tls12EcdheEcdsaWithAes256GcmSha384
+        | CipherSuiteId::Tls12EcdheRsaWithAes256GcmSha384 => 2,
+
+        CipherSuiteId::Tls13Chacha20Poly1305Sha256
+        | CipherSuiteId::Tls12EcdheEcdsaWithChacha20Poly1305Sha256
+        | CipherSuiteId::Tls12EcdheRsaWithChacha20Poly1305Sha256 => 1,
+
+        CipherSuiteId::Tls13Aes128GcmSha256
+        | CipherSuiteId::Tls12EcdheEcdsaWithAes128GcmSha256
+        | CipherSuiteId::Tls12EcdheRsaWithAes128GcmSha256 => 0,
+    }
+}
+
+/// Find the first pair where a weaker cipher suite precedes a
+/// stronger one in the configured order.
+///
+/// Returns `None` when the ordering is non-increasing by strength
+/// (i.e. strongest-first or all equal).
+fn find_weak_before_strong(suites: &[CipherSuiteId]) -> Option<(&CipherSuiteId, &CipherSuiteId)> {
+    suites.windows(2).find_map(|w| match (w.first(), w.get(1)) {
+        (Some(a), Some(b)) if cipher_strength_tier(a) < cipher_strength_tier(b) => Some((a, b)),
+        _ => None,
+    })
 }
 
 // -----------------------------------------------------------------------------
@@ -562,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn maybe_filter_provider_preserves_order() {
+    fn maybe_filter_provider_preserves_configured_order() {
         let provider = default_crypto_provider();
         let ids = [
             CipherSuiteId::Tls13Chacha20Poly1305Sha256,
@@ -575,6 +631,46 @@ mod tests {
             2,
             "filtering to two suites should yield exactly two"
         );
+        assert_eq!(
+            result.cipher_suites[0].suite(),
+            CipherSuiteId::Tls13Chacha20Poly1305Sha256.to_rustls().suite(),
+            "first suite should match the first configured cipher"
+        );
+        assert_eq!(
+            result.cipher_suites[1].suite(),
+            CipherSuiteId::Tls13Aes128GcmSha256.to_rustls().suite(),
+            "second suite should match the second configured cipher"
+        );
+    }
+
+    #[test]
+    fn maybe_filter_provider_reverses_provider_order_when_configured() {
+        let provider = default_crypto_provider();
+        let ids = [
+            CipherSuiteId::Tls13Aes128GcmSha256,
+            CipherSuiteId::Tls13Aes256GcmSha384,
+            CipherSuiteId::Tls13Chacha20Poly1305Sha256,
+        ];
+        let reversed = [
+            CipherSuiteId::Tls13Chacha20Poly1305Sha256,
+            CipherSuiteId::Tls13Aes256GcmSha384,
+            CipherSuiteId::Tls13Aes128GcmSha256,
+        ];
+
+        let forward = maybe_filter_provider(Arc::clone(&provider), Some(&ids)).expect("forward filter should succeed");
+        let backward = maybe_filter_provider(provider, Some(&reversed)).expect("reversed filter should succeed");
+
+        assert_eq!(forward.cipher_suites.len(), 3, "forward should have three suites");
+        assert_eq!(backward.cipher_suites.len(), 3, "reversed should have three suites");
+
+        for i in 0..3 {
+            assert_eq!(
+                forward.cipher_suites[i].suite(),
+                backward.cipher_suites[2 - i].suite(),
+                "forward[{i}] should equal reversed[{}]",
+                2 - i,
+            );
+        }
     }
 
     #[test]
@@ -620,6 +716,129 @@ mod tests {
             "ALPN should include h2 and http/1.1"
         );
         assert!(result.verifier_handle.is_none(), "no mTLS means no verifier handle");
+    }
+
+    #[test]
+    fn cipher_strength_tier_aes256_is_highest() {
+        assert_eq!(
+            cipher_strength_tier(&CipherSuiteId::Tls13Aes256GcmSha384),
+            2,
+            "TLS 1.3 AES-256"
+        );
+        assert_eq!(
+            cipher_strength_tier(&CipherSuiteId::Tls12EcdheEcdsaWithAes256GcmSha384),
+            2,
+            "TLS 1.2 ECDSA AES-256"
+        );
+        assert_eq!(
+            cipher_strength_tier(&CipherSuiteId::Tls12EcdheRsaWithAes256GcmSha384),
+            2,
+            "TLS 1.2 RSA AES-256"
+        );
+    }
+
+    #[test]
+    fn cipher_strength_tier_chacha20_is_middle() {
+        assert_eq!(
+            cipher_strength_tier(&CipherSuiteId::Tls13Chacha20Poly1305Sha256),
+            1,
+            "TLS 1.3 ChaCha20"
+        );
+        assert_eq!(
+            cipher_strength_tier(&CipherSuiteId::Tls12EcdheEcdsaWithChacha20Poly1305Sha256),
+            1,
+            "TLS 1.2 ECDSA ChaCha20"
+        );
+        assert_eq!(
+            cipher_strength_tier(&CipherSuiteId::Tls12EcdheRsaWithChacha20Poly1305Sha256),
+            1,
+            "TLS 1.2 RSA ChaCha20"
+        );
+    }
+
+    #[test]
+    fn cipher_strength_tier_aes128_is_lowest() {
+        assert_eq!(
+            cipher_strength_tier(&CipherSuiteId::Tls13Aes128GcmSha256),
+            0,
+            "TLS 1.3 AES-128"
+        );
+        assert_eq!(
+            cipher_strength_tier(&CipherSuiteId::Tls12EcdheEcdsaWithAes128GcmSha256),
+            0,
+            "TLS 1.2 ECDSA AES-128"
+        );
+        assert_eq!(
+            cipher_strength_tier(&CipherSuiteId::Tls12EcdheRsaWithAes128GcmSha256),
+            0,
+            "TLS 1.2 RSA AES-128"
+        );
+    }
+
+    #[test]
+    fn cipher_ordering_strong_first_no_violation() {
+        let suites = [
+            CipherSuiteId::Tls13Aes256GcmSha384,
+            CipherSuiteId::Tls13Chacha20Poly1305Sha256,
+            CipherSuiteId::Tls13Aes128GcmSha256,
+        ];
+        assert!(
+            find_weak_before_strong(&suites).is_none(),
+            "strongest-first ordering should have no violation"
+        );
+    }
+
+    #[test]
+    fn cipher_ordering_weak_first_detected() {
+        let suites = [CipherSuiteId::Tls13Aes128GcmSha256, CipherSuiteId::Tls13Aes256GcmSha384];
+        let result = find_weak_before_strong(&suites);
+        assert!(result.is_some(), "weak-before-strong should be detected");
+        let (weaker, stronger) = result.unwrap();
+        assert_eq!(*weaker, CipherSuiteId::Tls13Aes128GcmSha256, "weaker suite identity");
+        assert_eq!(
+            *stronger,
+            CipherSuiteId::Tls13Aes256GcmSha384,
+            "stronger suite identity"
+        );
+    }
+
+    #[test]
+    fn cipher_ordering_equal_tiers_no_violation() {
+        let suites = [
+            CipherSuiteId::Tls12EcdheEcdsaWithAes256GcmSha384,
+            CipherSuiteId::Tls12EcdheRsaWithAes256GcmSha384,
+        ];
+        assert!(
+            find_weak_before_strong(&suites).is_none(),
+            "same-tier suites should not trigger a violation"
+        );
+    }
+
+    #[test]
+    fn cipher_ordering_single_suite_no_violation() {
+        let suites = [CipherSuiteId::Tls13Aes128GcmSha256];
+        assert!(
+            find_weak_before_strong(&suites).is_none(),
+            "single suite should have no violation"
+        );
+    }
+
+    #[test]
+    fn cipher_ordering_non_adjacent_violation() {
+        let suites = [
+            CipherSuiteId::Tls13Aes256GcmSha384,
+            CipherSuiteId::Tls13Aes128GcmSha256,
+            CipherSuiteId::Tls13Chacha20Poly1305Sha256,
+        ];
+        let result = find_weak_before_strong(&suites);
+        assert!(result.is_some(), "AES-128 before ChaCha20 should be detected");
+        let (weaker, stronger) = result.unwrap();
+        assert_eq!(*weaker, CipherSuiteId::Tls13Aes128GcmSha256, "weaker suite identity");
+        assert_eq!(
+            *stronger,
+            CipherSuiteId::Tls13Chacha20Poly1305Sha256,
+            "stronger suite identity"
+        );
     }
 
     // -----------------------------------------------------------------------------

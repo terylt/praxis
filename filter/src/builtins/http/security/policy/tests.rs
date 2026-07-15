@@ -163,10 +163,10 @@ async fn dispatch_echo_as(filter: &PolicyFilter, subject: &str) -> FilterAction 
         HeaderValue::from_str(&format!("Bearer {token}")).expect("header value"),
     );
     let mut ctx = make_filter_context(&req);
-    ctx.set_metadata("protocol.method", "service/invoke");
+    ctx.set_metadata("protocol.method", "tools/call");
     ctx.set_metadata("protocol.name", "echo");
     let body = bytes::Bytes::from_static(
-        br#"{"jsonrpc":"2.0","id":1,"method":"service/invoke","params":{"name":"echo","arguments":{}}}"#,
+        br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#,
     );
     filter
         .on_request_body(&mut ctx, &mut Some(body), true)
@@ -240,10 +240,10 @@ async fn dispatch_tool_session(filter: &PolicyFilter, subject: &str, tool: &str,
         HeaderValue::from_str(session_id).expect("session header"),
     );
     let mut ctx = make_filter_context(&req);
-    ctx.set_metadata("protocol.method", "service/invoke");
+    ctx.set_metadata("protocol.method", "tools/call");
     ctx.set_metadata("protocol.name", tool);
     let body = bytes::Bytes::from_static(
-        br#"{"jsonrpc":"2.0","id":1,"method":"service/invoke","params":{"name":"t","arguments":{}}}"#,
+        br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"t","arguments":{}}}"#,
     );
     filter
         .on_request_body(&mut ctx, &mut Some(body), true)
@@ -834,7 +834,7 @@ fn auth_rejection_falls_back_to_sentinel_when_no_violation() {
 fn fit_to_original_length_pads_on_shrink() {
     use super::filter::fit_to_original_length;
     let new = bytes::Bytes::from_static(b"abc");
-    let out = fit_to_original_length(new, 8, "service/invoke", "test");
+    let out = fit_to_original_length(new, 8, "tools/call", "test");
     assert_eq!(out.len(), 8, "padded length must match original");
     assert_eq!(&out[..3], b"abc");
     assert!(
@@ -851,7 +851,7 @@ fn fit_to_original_length_pads_on_shrink() {
 fn fit_to_original_length_passes_through_on_equal() {
     use super::filter::fit_to_original_length;
     let new = bytes::Bytes::from_static(b"redacted");
-    let out = fit_to_original_length(new.clone(), 8, "service/invoke", "test");
+    let out = fit_to_original_length(new.clone(), 8, "tools/call", "test");
     assert_eq!(out, new);
 }
 
@@ -865,7 +865,7 @@ fn fit_to_original_length_passes_through_on_equal() {
 fn fit_to_original_length_truncates_on_grow() {
     use super::filter::fit_to_original_length;
     let new = bytes::Bytes::from_static(b"a much longer rewritten payload");
-    let out = fit_to_original_length(new.clone(), 4, "service/invoke", "test");
+    let out = fit_to_original_length(new.clone(), 4, "tools/call", "test");
     assert_eq!(out.len(), 4, "grow path must truncate to the original length");
     assert_eq!(&*out, &new[..4], "truncation keeps the leading bytes");
 }
@@ -879,9 +879,9 @@ fn fit_to_original_length_truncates_on_grow() {
 #[test]
 fn entity_for_protocol_method_covers_known_methods() {
     use super::common_message_format::entity_for_protocol_method;
-    assert!(entity_for_protocol_method("service/invoke").is_some());
-    assert!(entity_for_protocol_method("template/get").is_some());
-    assert!(entity_for_protocol_method("resource/read").is_some());
+    assert!(entity_for_protocol_method("tools/call").is_some());
+    assert!(entity_for_protocol_method("prompts/get").is_some());
+    assert!(entity_for_protocol_method("resources/read").is_some());
     assert!(entity_for_protocol_method("service/list").is_none());
     assert!(entity_for_protocol_method("initialize").is_none());
     assert!(entity_for_protocol_method("unknown/method").is_none());
@@ -891,9 +891,9 @@ fn entity_for_protocol_method_covers_known_methods() {
 #[test]
 fn entity_for_protocol_method_post_covers_known_methods() {
     use super::common_message_format::entity_for_protocol_method_post;
-    assert!(entity_for_protocol_method_post("service/invoke").is_some());
-    assert!(entity_for_protocol_method_post("template/get").is_some());
-    assert!(entity_for_protocol_method_post("resource/read").is_some());
+    assert!(entity_for_protocol_method_post("tools/call").is_some());
+    assert!(entity_for_protocol_method_post("prompts/get").is_some());
+    assert!(entity_for_protocol_method_post("resources/read").is_some());
     assert!(entity_for_protocol_method_post("service/list").is_none());
     assert!(entity_for_protocol_method_post("initialize").is_none());
 }
@@ -941,10 +941,10 @@ fn build_content_for_method_tools_call() {
     use super::json_rpc::build_content_for_method;
 
     let body = bytes::Bytes::from_static(
-        br#"{"jsonrpc":"2.0","id":1,"method":"service/invoke",
+        br#"{"jsonrpc":"2.0","id":1,"method":"tools/call",
              "params":{"name":"echo","arguments":{"text":"hi","n":7}}}"#,
     );
-    let parts = build_content_for_method("service/invoke", "echo", "corr-1", &body);
+    let parts = build_content_for_method("tools/call", "echo", "corr-1", &body);
     assert_eq!(parts.len(), 1);
     match &parts[0] {
         ContentPart::ToolCall { content } => {
@@ -966,10 +966,10 @@ fn build_content_for_method_resources_read() {
     use super::json_rpc::build_content_for_method;
 
     let body = bytes::Bytes::from_static(
-        br#"{"jsonrpc":"2.0","id":1,"method":"resource/read",
+        br#"{"jsonrpc":"2.0","id":1,"method":"resources/read",
              "params":{"uri":"file:///etc/example"}}"#,
     );
-    let parts = build_content_for_method("resource/read", "file:///etc/example", "corr-1", &body);
+    let parts = build_content_for_method("resources/read", "file:///etc/example", "corr-1", &body);
     assert_eq!(parts.len(), 1);
     match &parts[0] {
         ContentPart::ResourceRef { content } => {
@@ -1002,7 +1002,7 @@ fn reserialize_tools_call_round_trips_with_mutated_args() {
     use super::json_rpc::reserialize_json_rpc_body;
 
     let original = bytes::Bytes::from_static(
-        br#"{"jsonrpc":"2.0","id":1,"method":"service/invoke",
+        br#"{"jsonrpc":"2.0","id":1,"method":"tools/call",
              "params":{"name":"echo","arguments":{"a":1}}}"#,
     );
     let mut new_args: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
@@ -1018,11 +1018,11 @@ fn reserialize_tools_call_round_trips_with_mutated_args() {
             },
         }],
     );
-    let new_bytes = reserialize_json_rpc_body(&original, "service/invoke", &message).expect("rewrite Some");
+    let new_bytes = reserialize_json_rpc_body(&original, "tools/call", &message).expect("rewrite Some");
     let parsed: serde_json::Value = serde_json::from_slice(&new_bytes).expect("valid JSON");
     assert_eq!(parsed["jsonrpc"], "2.0");
     assert_eq!(parsed["id"], 1);
-    assert_eq!(parsed["method"], "service/invoke");
+    assert_eq!(parsed["method"], "tools/call");
     assert_eq!(parsed["params"]["name"], "echo");
     assert_eq!(parsed["params"]["arguments"]["a"], "[REDACTED]");
 }
@@ -1042,7 +1042,7 @@ fn build_response_content_for_method_text_fallback() {
              "content":[{"type":"text","text":"{\"k\":\"v\"}"}],
              "isError":false}}"#,
     );
-    let parts = build_response_content_for_method("service/invoke", "echo", "corr-1", &body);
+    let parts = build_response_content_for_method("tools/call", "echo", "corr-1", &body);
     assert_eq!(parts.len(), 1);
     match &parts[0] {
         ContentPart::ToolResult { content } => {
@@ -1067,7 +1067,7 @@ fn build_response_content_for_method_prefers_structured_content() {
              "structuredContent":{"hi":"there"},
              "isError":true}}"#,
     );
-    let parts = build_response_content_for_method("service/invoke", "echo", "corr-1", &body);
+    let parts = build_response_content_for_method("tools/call", "echo", "corr-1", &body);
     assert_eq!(parts.len(), 1);
     match &parts[0] {
         ContentPart::ToolResult { content } => {
@@ -1097,7 +1097,7 @@ fn build_response_content_for_method_folds_all_text_blocks() {
              ],
              "isError":false}}"#,
     );
-    let parts = build_response_content_for_method("service/invoke", "echo", "corr-1", &body);
+    let parts = build_response_content_for_method("tools/call", "echo", "corr-1", &body);
     assert_eq!(parts.len(), 1);
     match &parts[0] {
         ContentPart::ToolResult { content } => {
@@ -1137,7 +1137,7 @@ fn reserialize_response_collapses_to_single_vetted_block() {
             },
         }],
     );
-    let out = reserialize_json_rpc_response_body(&original, "service/invoke", &message).expect("Some");
+    let out = reserialize_json_rpc_response_body(&original, "tools/call", &message).expect("Some");
     let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
     let content = parsed["result"]["content"].as_array().expect("content array");
     assert_eq!(content.len(), 1, "extra blocks must be dropped; got {content:?}");
@@ -1164,7 +1164,7 @@ fn deny_envelope_fits_committed_length() {
     let violation = PluginViolation::new("gateway.response_rewrite_overflow", "too large to fit");
     let envelope = json_rpc_error_envelope_bytes(Some(&violation), &serde_json::json!(1));
     let original_len = envelope.len() + 64;
-    let fitted = fit_to_original_length(envelope, original_len, "service/invoke", "overflow");
+    let fitted = fit_to_original_length(envelope, original_len, "tools/call", "overflow");
     assert_eq!(
         fitted.len(),
         original_len,
@@ -1193,11 +1193,11 @@ async fn on_request_body_dispatches_cmf_when_metadata_present() {
         HeaderValue::from_str(&format!("Bearer {token}")).expect("header value"),
     );
     let mut ctx = make_filter_context(&req);
-    ctx.set_metadata("protocol.method", "service/invoke");
+    ctx.set_metadata("protocol.method", "tools/call");
     ctx.set_metadata("protocol.name", "echo");
 
     let body = bytes::Bytes::from_static(
-        br#"{"jsonrpc":"2.0","id":1,"method":"service/invoke",
+        br#"{"jsonrpc":"2.0","id":1,"method":"tools/call",
              "params":{"name":"echo","arguments":{}}}"#,
     );
 
@@ -1376,7 +1376,7 @@ async fn response_phase_without_request_identity_fails_closed() {
 
     let req = make_request(Method::POST, "/");
     let mut ctx = make_filter_context(&req);
-    ctx.set_metadata("protocol.method", "service/invoke");
+    ctx.set_metadata("protocol.method", "tools/call");
     ctx.set_metadata("protocol.name", "echo");
 
     // No `on_request_body` ran on this ctx, so no `ResolvedIdentity` is

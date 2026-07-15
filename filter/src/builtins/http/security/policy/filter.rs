@@ -16,6 +16,7 @@ use bytes::Bytes;
 use cpex::cpex_core::{
     cmf::{CmfHook, Message, MessagePayload, Role},
     error::{PluginError, PluginViolation},
+    extensions::HttpExtension,
     hooks::Extensions,
     identity::{HOOK_IDENTITY_RESOLVE, IdentityHook, IdentityPayload, TokenSource},
     manager::PluginManager,
@@ -287,6 +288,17 @@ impl PolicyFilter {
             ext.agent = Some(Arc::new(agent));
         }
 
+        // Carry inbound request headers into the CMF `http` extension so
+        // header-driven policy can read them. Capability-gated downstream
+        // (`read_headers`), so plugins that don't declare it never see this
+        // slot — only the route handler (which reads the unfiltered working
+        // extensions) uses it, e.g. to seed the elicitation retry id from the
+        // `X-Policy-Elicitation-Id` request header.
+        ext.http = Some(Arc::new(HttpExtension {
+            request_headers: headers.clone(),
+            ..Default::default()
+        }));
+
         ext
     }
 }
@@ -371,6 +383,19 @@ impl HttpFilter for PolicyFilter {
             _ => {}, // RUNTIME_OK — fall through.
         }
 
+        // When a downstream body-buffering filter forces a pre-read (e.g. the
+        // protocol classifier, or this filter in `read_write` mode), praxis
+        // runs `on_request_body` BEFORE this header phase. That body phase has
+        // already resolved and enforced identity (stashing `ResolvedIdentity`)
+        // and may have stripped the inbound identity headers (`X-User-Token`,
+        // `Authorization`) for the upstream. Re-resolving here would fail on
+        // the now-stripped headers and spuriously reject an already-authorized
+        // request. The body phase is authoritative — skip the early gate.
+        if ctx.extensions.get::<ResolvedIdentity>().is_some() {
+            tracing::trace!(target: "policy.filter", "identity already resolved in body phase; skipping early gate");
+            return Ok(FilterAction::Continue);
+        }
+
         // Early identity gate. Saves the per-request body-buffer cost
         // on un-auth'd traffic — if there's no valid token, we never
         // reach `on_request_body` and the body never gets buffered.
@@ -418,7 +443,7 @@ impl HttpFilter for PolicyFilter {
         // so the misconfig is loud at first request. Operators
         // fronting non-classified traffic can opt out via
         // `require_protocol_metadata: false`.
-        let Some(method) = ctx.get_metadata("protocol.method").map(str::to_owned) else {
+        let Some(method) = ctx.get_metadata("mcp.method").map(str::to_owned) else {
             if self.cfg.require_protocol_metadata {
                 tracing::warn!(
                     target: "policy.filter",
@@ -439,7 +464,7 @@ impl HttpFilter for PolicyFilter {
             );
             return Ok(FilterAction::BodyDone);
         };
-        let Some(entity_name) = ctx.get_metadata("protocol.name").map(str::to_owned) else {
+        let Some(entity_name) = ctx.get_metadata("mcp.name").map(str::to_owned) else {
             tracing::debug!(
                 target: "policy.filter",
                 protocol_method = %method,
@@ -572,13 +597,13 @@ impl HttpFilter for PolicyFilter {
         // phase and praxis preserves `filter_metadata` across phases,
         // so we can route the post-phase hook without re-parsing the
         // body.
-        let Some(method) = ctx.get_metadata("protocol.method").map(str::to_owned) else {
+        let Some(method) = ctx.get_metadata("mcp.method").map(str::to_owned) else {
             return Ok(FilterAction::Continue);
         };
         let Some((entity_type, hook_name)) = entity_for_protocol_method_post(&method) else {
             return Ok(FilterAction::Continue);
         };
-        let Some(entity_name) = ctx.get_metadata("protocol.name").map(str::to_owned) else {
+        let Some(entity_name) = ctx.get_metadata("mcp.name").map(str::to_owned) else {
             return Ok(FilterAction::Continue);
         };
 

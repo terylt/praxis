@@ -299,6 +299,7 @@ fn collect_escalated_flags<'a>(
             allow_private_health_checks,
             allow_public_admin,
             allow_root,
+            allow_tls_no_verify,
             allow_tls_without_sni,
             allow_unbounded_body,
             csrf_log_only,
@@ -809,8 +810,10 @@ filter_chains:
     #[test]
     fn escalation_single_flag_detected() {
         let old = InsecureOptions::default();
-        let mut new = InsecureOptions::default();
-        new.allow_root = true;
+        let new = InsecureOptions {
+            allow_root: true,
+            ..Default::default()
+        };
 
         let escalated = collect_escalated_flags(&old, &new);
         assert_eq!(
@@ -823,10 +826,12 @@ filter_chains:
     #[test]
     fn escalation_multiple_flags_detected() {
         let old = InsecureOptions::default();
-        let mut new = InsecureOptions::default();
-        new.allow_public_admin = true;
-        new.allow_root = true;
-        new.skip_pipeline_validation = true;
+        let new = InsecureOptions {
+            allow_public_admin: true,
+            allow_root: true,
+            skip_pipeline_validation: true,
+            ..Default::default()
+        };
 
         let escalated = collect_escalated_flags(&old, &new);
         assert_eq!(
@@ -845,9 +850,11 @@ filter_chains:
 
     #[test]
     fn deescalation_not_flagged() {
-        let mut old = InsecureOptions::default();
-        old.allow_root = true;
-        old.skip_pipeline_validation = true;
+        let old = InsecureOptions {
+            allow_root: true,
+            skip_pipeline_validation: true,
+            ..Default::default()
+        };
         let new = InsecureOptions::default();
 
         let escalated = collect_escalated_flags(&old, &new);
@@ -856,11 +863,15 @@ filter_chains:
 
     #[test]
     fn escalation_only_newly_enabled_reported() {
-        let mut old = InsecureOptions::default();
-        old.allow_root = true;
-        let mut new = InsecureOptions::default();
-        new.allow_root = true;
-        new.skip_pipeline_validation = true;
+        let old = InsecureOptions {
+            allow_root: true,
+            ..Default::default()
+        };
+        let new = InsecureOptions {
+            allow_root: true,
+            skip_pipeline_validation: true,
+            ..Default::default()
+        };
 
         let escalated = collect_escalated_flags(&old, &new);
         assert_eq!(
@@ -872,16 +883,18 @@ filter_chains:
 
     #[test]
     fn no_escalation_when_all_already_true() {
-        let mut opts = InsecureOptions::default();
-        opts.allow_open_security_filters = true;
-        opts.allow_private_endpoints = true;
-        opts.allow_private_health_checks = true;
-        opts.allow_public_admin = true;
-        opts.allow_root = true;
-        opts.allow_tls_without_sni = true;
-        opts.allow_unbounded_body = true;
-        opts.csrf_log_only = true;
-        opts.skip_pipeline_validation = true;
+        let opts = InsecureOptions {
+            allow_open_security_filters: true,
+            allow_private_endpoints: true,
+            allow_private_health_checks: true,
+            allow_public_admin: true,
+            allow_root: true,
+            allow_tls_no_verify: true,
+            allow_tls_without_sni: true,
+            allow_unbounded_body: true,
+            csrf_log_only: true,
+            skip_pipeline_validation: true,
+        };
 
         let escalated = collect_escalated_flags(&opts, &opts);
         assert!(escalated.is_empty(), "already-true flags should not be reported");

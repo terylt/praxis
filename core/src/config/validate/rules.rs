@@ -68,6 +68,9 @@ impl Config {
         validate_runtime_threads(self.runtime.threads)?;
         validate_runtime_max_connections(self.runtime.max_connections)?;
         validate_keepalive_pool_size(self.runtime.upstream_keepalive_pool_size)?;
+        validate_max_memory_bytes(self.runtime.max_memory_bytes)?;
+        validate_global_queue_interval(self.runtime.global_queue_interval)?;
+        validate_shutdown_timeout(self.shutdown_timeout_secs)?;
 
         Ok(())
     }
@@ -281,6 +284,15 @@ fn validate_runtime_threads(threads: usize) -> Result<(), ProxyError> {
 /// Maximum allowed `upstream_keepalive_pool_size` (10,000 per worker).
 const MAX_KEEPALIVE_POOL_SIZE: usize = 10_000;
 
+/// Minimum allowed `max_memory_bytes` (1 MiB).
+const MIN_MEMORY_BYTES: usize = 1_048_576; // 1 MiB
+
+/// Maximum allowed `max_memory_bytes` (1 `TiB`).
+const MAX_MEMORY_BYTES: usize = 1_099_511_627_776; // 1 TiB
+
+/// Maximum allowed `shutdown_timeout_secs` (1 hour).
+const MAX_SHUTDOWN_TIMEOUT_SECS: u64 = 3_600;
+
 /// Reject `runtime.max_connections` values that are zero or above the ceiling.
 fn validate_runtime_max_connections(max_connections: Option<u32>) -> Result<(), ProxyError> {
     let Some(v) = max_connections else {
@@ -305,6 +317,47 @@ fn validate_keepalive_pool_size(pool_size: Option<usize>) -> Result<(), ProxyErr
     {
         return Err(ProxyError::Config(format!(
             "runtime.upstream_keepalive_pool_size ({v}) exceeds maximum ({MAX_KEEPALIVE_POOL_SIZE})"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject `runtime.max_memory_bytes` outside the allowed range.
+fn validate_max_memory_bytes(max_memory_bytes: Option<usize>) -> Result<(), ProxyError> {
+    let Some(v) = max_memory_bytes else {
+        return Ok(());
+    };
+    if v < MIN_MEMORY_BYTES {
+        return Err(ProxyError::Config(format!(
+            "runtime.max_memory_bytes ({v}) must be >= {MIN_MEMORY_BYTES} (1 MiB)"
+        )));
+    }
+    if v > MAX_MEMORY_BYTES {
+        return Err(ProxyError::Config(format!(
+            "runtime.max_memory_bytes ({v}) exceeds maximum ({MAX_MEMORY_BYTES} / 1 TiB)"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject `runtime.global_queue_interval` of zero.
+fn validate_global_queue_interval(interval: Option<u32>) -> Result<(), ProxyError> {
+    if let Some(0) = interval {
+        return Err(ProxyError::Config(
+            "runtime.global_queue_interval must be > 0".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Reject `shutdown_timeout_secs` of zero or above the ceiling.
+fn validate_shutdown_timeout(secs: u64) -> Result<(), ProxyError> {
+    if secs == 0 {
+        return Err(ProxyError::Config("shutdown_timeout_secs must be > 0".to_owned()));
+    }
+    if secs > MAX_SHUTDOWN_TIMEOUT_SECS {
+        return Err(ProxyError::Config(format!(
+            "shutdown_timeout_secs ({secs}) exceeds maximum ({MAX_SHUTDOWN_TIMEOUT_SECS}s / 1 hour)"
         )));
     }
     Ok(())
@@ -1019,6 +1072,165 @@ listeners:
     filter_chains: [main]
 runtime:
   upstream_keepalive_pool_size: 10000
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#;
+        Config::from_yaml(yaml).unwrap();
+    }
+
+    #[test]
+    fn reject_max_memory_bytes_below_minimum() {
+        let yaml = r#"
+listeners:
+  - name: web
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+runtime:
+  max_memory_bytes: 1000
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#;
+        let err = Config::from_yaml(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("must be >= 1048576"),
+            "should reject max_memory_bytes below 1 MiB: {err}"
+        );
+    }
+
+    #[test]
+    fn accept_max_memory_bytes_at_minimum() {
+        let yaml = r#"
+listeners:
+  - name: web
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+runtime:
+  max_memory_bytes: 1048576
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#;
+        Config::from_yaml(yaml).unwrap();
+    }
+
+    #[test]
+    fn accept_max_memory_bytes_unset() {
+        let yaml = r#"
+listeners:
+  - name: web
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#;
+        let config = Config::from_yaml(yaml).unwrap();
+        assert!(
+            config.runtime.max_memory_bytes.is_none(),
+            "max_memory_bytes should default to None"
+        );
+    }
+
+    #[test]
+    fn reject_global_queue_interval_zero() {
+        let yaml = r#"
+listeners:
+  - name: web
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+runtime:
+  global_queue_interval: 0
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#;
+        let err = Config::from_yaml(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("global_queue_interval must be > 0"),
+            "should reject zero global_queue_interval: {err}"
+        );
+    }
+
+    #[test]
+    fn accept_global_queue_interval_positive() {
+        let yaml = r#"
+listeners:
+  - name: web
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+runtime:
+  global_queue_interval: 1
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#;
+        Config::from_yaml(yaml).unwrap();
+    }
+
+    #[test]
+    fn reject_shutdown_timeout_zero() {
+        let yaml = r#"
+listeners:
+  - name: web
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+shutdown_timeout_secs: 0
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#;
+        let err = Config::from_yaml(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("shutdown_timeout_secs must be > 0"),
+            "should reject zero shutdown timeout: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_shutdown_timeout_exceeding_maximum() {
+        let yaml = r#"
+listeners:
+  - name: web
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+shutdown_timeout_secs: 7200
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#;
+        let err = Config::from_yaml(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds maximum"),
+            "should reject shutdown timeout > 1 hour: {err}"
+        );
+    }
+
+    #[test]
+    fn accept_shutdown_timeout_at_maximum() {
+        let yaml = r#"
+listeners:
+  - name: web
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+shutdown_timeout_secs: 3600
 filter_chains:
   - name: main
     filters:

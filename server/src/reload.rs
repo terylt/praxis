@@ -62,6 +62,7 @@ pub(crate) fn reload_pipelines(
     };
 
     log_restart_required_changes(old_config, new_config);
+    warn_insecure_option_escalations(old_config, new_config);
     warn_stateful_filter_reset(new_config);
 
     let mut swapped = Vec::new();
@@ -248,6 +249,57 @@ fn detect_tls_toggles(old: &Config, new: &Config) {
                 _ => {},
             }
         }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Insecure Option Escalation Detection
+// -----------------------------------------------------------------------------
+
+/// Produce `(name, old_val, new_val)` tuples for every [`InsecureOptions`] flag.
+///
+/// [`InsecureOptions`]: praxis_core::config::InsecureOptions
+macro_rules! insecure_flag_pairs {
+    ($old:expr, $new:expr, [$($field:ident),* $(,)?]) => {
+        [$(  (stringify!($field), $old.$field, $new.$field)  ),*]
+    };
+}
+
+/// Log a warning when insecure options are newly enabled during a reload.
+///
+/// Compares each [`InsecureOptions`] flag between the old and new configs.
+/// Any flag that transitions from `false` to `true` is reported as a
+/// security escalation. The reload proceeds regardless; this is
+/// detection, not prevention.
+///
+/// [`InsecureOptions`]: praxis_core::config::InsecureOptions
+fn warn_insecure_option_escalations(old: &Config, new: &Config) {
+    let escalated: Vec<&str> = insecure_flag_pairs!(
+        old.insecure_options,
+        new.insecure_options,
+        [
+            allow_open_security_filters,
+            allow_private_endpoints,
+            allow_private_health_checks,
+            allow_public_admin,
+            allow_root,
+            allow_tls_without_sni,
+            allow_unbounded_body,
+            csrf_log_only,
+            skip_pipeline_validation,
+        ]
+    )
+    .into_iter()
+    .filter(|(_, old_val, new_val)| !old_val && *new_val)
+    .map(|(name, ..)| name)
+    .collect();
+
+    if !escalated.is_empty() {
+        warn!(
+            options = ?escalated,
+            "insecure options escalated during reload; \
+             security overrides were newly enabled"
+        );
     }
 }
 
@@ -741,6 +793,84 @@ filter_chains:
         .unwrap();
 
         detect_compression_additions(&config, &config);
+    }
+
+    #[test]
+    fn insecure_option_escalation_detected() {
+        let old = valid_config();
+        let new = Config::from_yaml(
+            r#"
+listeners:
+  - name: web
+    address: "127.0.0.1:8080"
+    filter_chains: [main]
+insecure_options:
+  allow_root: true
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#,
+        )
+        .unwrap();
+
+        warn_insecure_option_escalations(&old, &new);
+    }
+
+    #[test]
+    fn insecure_option_multiple_escalations_detected() {
+        let old = valid_config();
+        let new = Config::from_yaml(
+            r#"
+listeners:
+  - name: web
+    address: "127.0.0.1:8080"
+    filter_chains: [main]
+insecure_options:
+  allow_root: true
+  skip_pipeline_validation: true
+  allow_public_admin: true
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#,
+        )
+        .unwrap();
+
+        warn_insecure_option_escalations(&old, &new);
+    }
+
+    #[test]
+    fn insecure_option_no_escalation_when_unchanged() {
+        let config = valid_config();
+        warn_insecure_option_escalations(&config, &config);
+    }
+
+    #[test]
+    fn insecure_option_deescalation_not_flagged() {
+        let old = Config::from_yaml(
+            r#"
+listeners:
+  - name: web
+    address: "127.0.0.1:8080"
+    filter_chains: [main]
+insecure_options:
+  allow_root: true
+  skip_pipeline_validation: true
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#,
+        )
+        .unwrap();
+        let new = valid_config();
+
+        warn_insecure_option_escalations(&old, &new);
     }
 
     // -------------------------------------------------------------------------

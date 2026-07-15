@@ -12,7 +12,7 @@
 //! [`HeaderMutation`]: crate::proto::envoy::service::ext_proc::v3::HeaderMutation
 //! [`ImmediateResponse`]: crate::proto::envoy::service::ext_proc::v3::ImmediateResponse
 
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashSet};
 
 use bytes::Bytes;
 use praxis_filter::{FilterAction, HttpFilterContext, Rejection, TrustedHeaderMutation};
@@ -26,16 +26,74 @@ use crate::{
 };
 
 // -----------------------------------------------------------------------------
+// ForwardRules
+// -----------------------------------------------------------------------------
+
+/// Compiled header-forwarding rules for the `ext_proc` filter.
+///
+/// Controls which request/response headers are sent to the external
+/// processor. An empty instance (the default) forwards all headers,
+/// preserving backwards compatibility.
+///
+/// When both `allowed` and `disallowed` are set, a header must be in
+/// the allowlist **and** not in the denylist to be forwarded. The
+/// denylist always takes precedence.
+///
+/// Header names are stored in lowercase for case-insensitive matching
+/// against the lowercase names produced by [`http::HeaderName`].
+///
+/// [`http::HeaderName`]: http::header::HeaderName
+#[derive(Debug, Default)]
+pub(crate) struct ForwardRules {
+    /// Only forward headers whose lowercase names are in this set.
+    /// Empty means no allowlist constraint (forward all).
+    allowed: HashSet<String>,
+
+    /// Never forward headers whose lowercase names are in this set.
+    disallowed: HashSet<String>,
+}
+
+impl ForwardRules {
+    /// Compile forward rules from config-provided header name lists.
+    ///
+    /// Lowercases all names at construction time so that runtime
+    /// lookups are simple equality checks.
+    pub(crate) fn new(allowed: Vec<String>, disallowed: Vec<String>) -> Self {
+        Self {
+            allowed: allowed.into_iter().map(|s| s.to_ascii_lowercase()).collect(),
+            disallowed: disallowed.into_iter().map(|s| s.to_ascii_lowercase()).collect(),
+        }
+    }
+
+    /// Returns `true` if the header should be forwarded to the processor.
+    ///
+    /// Pseudo-headers (`:` prefix) are outside the scope of forward
+    /// rules and must be checked by the caller.
+    fn should_forward(&self, name: &str) -> bool {
+        if self.allowed.is_empty() && self.disallowed.is_empty() {
+            return true;
+        }
+        if self.disallowed.contains(name) {
+            return false;
+        }
+        if self.allowed.is_empty() {
+            return true;
+        }
+        self.allowed.contains(name)
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Request → Proto
 // -----------------------------------------------------------------------------
 
 /// Build [`HttpHeaders`] from the current request context.
 ///
 /// Includes `:method`, `:path`, `:scheme`, and `:authority`
-/// pseudo-headers followed by all request headers, matching
-/// the Envoy `ext_proc` convention that external processors
-/// expect.
-pub(crate) fn request_to_proto_headers(ctx: &HttpFilterContext<'_>) -> HttpHeaders {
+/// pseudo-headers followed by request headers that pass the
+/// configured [`ForwardRules`]. Pseudo-headers are always
+/// included regardless of forward rules.
+pub(crate) fn request_to_proto_headers(ctx: &HttpFilterContext<'_>, rules: &ForwardRules) -> HttpHeaders {
     let path = ctx
         .request
         .uri
@@ -54,7 +112,9 @@ pub(crate) fn request_to_proto_headers(ctx: &HttpFilterContext<'_>) -> HttpHeade
     }
 
     for (name, value) in &ctx.request.headers {
-        headers.push(proto_header(name.as_str(), value.to_str().unwrap_or_default()));
+        if rules.should_forward(name.as_str()) {
+            headers.push(proto_header(name.as_str(), value.to_str().unwrap_or_default()));
+        }
     }
 
     HttpHeaders {
@@ -65,17 +125,20 @@ pub(crate) fn request_to_proto_headers(ctx: &HttpFilterContext<'_>) -> HttpHeade
 
 /// Build [`HttpHeaders`] from the upstream response context.
 ///
-/// Includes a `:status` pseudo-header followed by all response
-/// headers. Returns empty headers when `ctx.response_header` is
-/// `None` (should not happen during the response phase).
-pub(crate) fn response_to_proto_headers(ctx: &HttpFilterContext<'_>) -> HttpHeaders {
+/// Includes a `:status` pseudo-header followed by response
+/// headers that pass the configured [`ForwardRules`]. Returns
+/// empty headers when `ctx.response_header` is `None` (should
+/// not happen during the response phase).
+pub(crate) fn response_to_proto_headers(ctx: &HttpFilterContext<'_>, rules: &ForwardRules) -> HttpHeaders {
     let mut headers = Vec::new();
 
     if let Some(resp) = ctx.response_header.as_ref() {
         headers.push(proto_header(":status", &resp.status.as_u16().to_string()));
 
         for (name, value) in &resp.headers {
-            headers.push(proto_header(name.as_str(), value.to_str().unwrap_or_default()));
+            if rules.should_forward(name.as_str()) {
+                headers.push(proto_header(name.as_str(), value.to_str().unwrap_or_default()));
+            }
         }
     }
 
@@ -715,6 +778,93 @@ mod tests {
         assert!(
             !resp.headers.contains_key("x-removable"),
             "non-reserved header should be removed from response"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ForwardRules
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn forward_rules_empty_forwards_all() {
+        let rules = ForwardRules::default();
+        assert!(
+            rules.should_forward("authorization"),
+            "empty rules should forward all headers"
+        );
+        assert!(rules.should_forward("cookie"), "empty rules should forward cookie");
+        assert!(
+            rules.should_forward("x-custom"),
+            "empty rules should forward custom headers"
+        );
+    }
+
+    #[test]
+    fn forward_rules_allowlist_only() {
+        let rules = ForwardRules::new(vec!["content-type".to_owned(), "accept".to_owned()], Vec::new());
+        assert!(
+            rules.should_forward("content-type"),
+            "allowed header should be forwarded"
+        );
+        assert!(rules.should_forward("accept"), "allowed header should be forwarded");
+        assert!(
+            !rules.should_forward("authorization"),
+            "unlisted header should not be forwarded with allowlist"
+        );
+        assert!(
+            !rules.should_forward("cookie"),
+            "unlisted header should not be forwarded with allowlist"
+        );
+    }
+
+    #[test]
+    fn forward_rules_denylist_only() {
+        let rules = ForwardRules::new(Vec::new(), vec!["authorization".to_owned(), "cookie".to_owned()]);
+        assert!(
+            !rules.should_forward("authorization"),
+            "denied header should not be forwarded"
+        );
+        assert!(!rules.should_forward("cookie"), "denied header should not be forwarded");
+        assert!(
+            rules.should_forward("content-type"),
+            "non-denied header should be forwarded"
+        );
+        assert!(
+            rules.should_forward("x-custom"),
+            "non-denied header should be forwarded"
+        );
+    }
+
+    #[test]
+    fn forward_rules_denylist_overrides_allowlist() {
+        let rules = ForwardRules::new(
+            vec!["authorization".to_owned(), "content-type".to_owned()],
+            vec!["authorization".to_owned()],
+        );
+        assert!(
+            !rules.should_forward("authorization"),
+            "denylist should override allowlist"
+        );
+        assert!(
+            rules.should_forward("content-type"),
+            "allowed and not denied should be forwarded"
+        );
+        assert!(
+            !rules.should_forward("cookie"),
+            "not in allowlist should not be forwarded"
+        );
+    }
+
+    #[test]
+    fn forward_rules_case_insensitive_construction() {
+        let rules = ForwardRules::new(vec!["Content-Type".to_owned()], vec!["Authorization".to_owned()]);
+        assert!(
+            rules.should_forward("content-type"),
+            "lowercase lookup should match mixed-case config"
+        );
+        assert!(
+            !rules.should_forward("authorization"),
+            "lowercase lookup should match mixed-case deny config"
         );
     }
 

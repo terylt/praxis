@@ -442,13 +442,11 @@ struct MutationRulesConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ForwardRulesConfig {
-    /// Only forward headers matching these patterns.
-    #[expect(dead_code, reason = "parsed for config compatibility; used in subsequent PRs")]
+    /// Only forward headers whose names match these entries.
     #[serde(default)]
     allowed_headers: Vec<String>,
 
-    /// Never forward headers matching these patterns.
-    #[expect(dead_code, reason = "parsed for config compatibility; used in subsequent PRs")]
+    /// Never forward headers whose names match these entries.
     #[serde(default)]
     disallowed_headers: Vec<String>,
 }
@@ -477,9 +475,6 @@ fn validate_config(cfg: &ExtProcConfig) -> Result<(), FilterError> {
     }
     if cfg.mutation_rules.is_some() {
         return Err("ext_proc: mutation_rules is not yet supported".into());
-    }
-    if cfg.forward_rules.is_some() {
-        return Err("ext_proc: forward_rules is not yet supported".into());
     }
     if cfg.allow_content_length_header {
         return Err("ext_proc: allow_content_length_header is not yet supported".into());
@@ -606,6 +601,10 @@ pub struct ExtProcFilter {
     /// [`channel`]: Self::channel
     endpoint: Endpoint,
 
+    /// Compiled header-forwarding rules controlling which headers
+    /// are sent to the external processor.
+    forward_rules: mutations::ForwardRules,
+
     /// Lazily-initialized gRPC channel, created on first use
     /// inside the request-processing Tokio runtime.
     lazy_channel: std::sync::OnceLock<Channel>,
@@ -676,9 +675,15 @@ impl ExtProcFilter {
 
         let message_timeout = Duration::from_millis(cfg.message_timeout_ms);
 
+        let forward_rules = match cfg.forward_rules {
+            Some(fr) => mutations::ForwardRules::new(fr.allowed_headers, fr.disallowed_headers),
+            None => mutations::ForwardRules::default(),
+        };
+
         Ok(Box::new(Self {
             deferred_close_timeout: Duration::from_millis(cfg.deferred_close_timeout_ms),
             endpoint,
+            forward_rules,
             lazy_channel: std::sync::OnceLock::new(),
             lifecycle_timeout: Duration::from_millis(cfg.lifecycle_timeout_ms),
             max_message_timeout: cfg.max_message_timeout_ms.map(Duration::from_millis),
@@ -776,7 +781,7 @@ impl ExtProcFilter {
             return Ok(());
         }
 
-        let headers = mutations::request_to_proto_headers(ctx);
+        let headers = mutations::request_to_proto_headers(ctx, &self.forward_rules);
         let headers_request = processing_request::Request::RequestHeaders(headers);
 
         let exchange =
@@ -806,7 +811,7 @@ impl ExtProcFilter {
 
     /// Open an exchange and send request headers as the first message.
     async fn open_and_send_request_headers(&self, ctx: &HttpFilterContext<'_>) -> Result<ExtProcState, FilterError> {
-        let headers = mutations::request_to_proto_headers(ctx);
+        let headers = mutations::request_to_proto_headers(ctx, &self.forward_rules);
         let headers_request = processing_request::Request::RequestHeaders(headers);
 
         let mut state = ExtProcState {
@@ -1034,7 +1039,7 @@ impl ExtProcFilter {
             return Err("ext_proc: response headers reached before request phase completed".into());
         }
 
-        let headers = mutations::response_to_proto_headers(ctx);
+        let headers = mutations::response_to_proto_headers(ctx, &self.forward_rules);
         let timeout = self.message_timeout;
         tokio::time::timeout(
             timeout,

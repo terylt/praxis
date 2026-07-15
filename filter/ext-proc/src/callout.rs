@@ -65,7 +65,7 @@ pub(crate) async fn process_request_headers(
     max_timeout: Option<Duration>,
     ctx: &mut HttpFilterContext<'_>,
 ) -> Result<FilterAction, FilterError> {
-    let headers = request_to_proto_headers(ctx);
+    let headers = request_to_proto_headers(ctx, &crate::mutations::ForwardRules::default());
     let request = ProcessingRequest {
         request: Some(processing_request::Request::RequestHeaders(headers)),
         ..Default::default()
@@ -90,7 +90,7 @@ pub(crate) async fn process_response_headers(
     max_timeout: Option<Duration>,
     ctx: &mut HttpFilterContext<'_>,
 ) -> Result<FilterAction, FilterError> {
-    let headers = response_to_proto_headers(ctx);
+    let headers = response_to_proto_headers(ctx, &crate::mutations::ForwardRules::default());
     let request = ProcessingRequest {
         request: Some(processing_request::Request::ResponseHeaders(headers)),
         ..Default::default()

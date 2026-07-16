@@ -22,6 +22,25 @@ use crate::{
     errors::ProxyError,
 };
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Maximum allowed worker threads per service.
+const MAX_THREADS: usize = 1_024;
+
+/// Maximum allowed `upstream_keepalive_pool_size` (10,000 per worker).
+const MAX_KEEPALIVE_POOL_SIZE: usize = 10_000;
+
+/// Minimum allowed `max_memory_bytes` (1 MiB).
+const MIN_MEMORY_BYTES: usize = 1_048_576; // 1 MiB
+
+/// Maximum allowed `max_memory_bytes` (1 `TiB`).
+const MAX_MEMORY_BYTES: usize = 1_099_511_627_776; // 1 TiB
+
+/// Maximum allowed `shutdown_timeout_secs` (1 hour).
+const MAX_SHUTDOWN_TIMEOUT_SECS: u64 = 3_600;
+
 // -----------------------------------------------------------------------------
 // Config Validation
 // -----------------------------------------------------------------------------
@@ -268,9 +287,6 @@ fn warn_if_symlink(path: &str) {
 // Runtime Validation
 // -----------------------------------------------------------------------------
 
-/// Maximum allowed worker threads per service.
-const MAX_THREADS: usize = 1_024;
-
 /// Reject unreasonable thread counts.
 fn validate_runtime_threads(threads: usize) -> Result<(), ProxyError> {
     if threads > MAX_THREADS {
@@ -280,18 +296,6 @@ fn validate_runtime_threads(threads: usize) -> Result<(), ProxyError> {
     }
     Ok(())
 }
-
-/// Maximum allowed `upstream_keepalive_pool_size` (10,000 per worker).
-const MAX_KEEPALIVE_POOL_SIZE: usize = 10_000;
-
-/// Minimum allowed `max_memory_bytes` (1 MiB).
-const MIN_MEMORY_BYTES: usize = 1_048_576; // 1 MiB
-
-/// Maximum allowed `max_memory_bytes` (1 `TiB`).
-const MAX_MEMORY_BYTES: usize = 1_099_511_627_776; // 1 TiB
-
-/// Maximum allowed `shutdown_timeout_secs` (1 hour).
-const MAX_SHUTDOWN_TIMEOUT_SECS: u64 = 3_600;
 
 /// Reject `runtime.max_connections` values that are zero or above the ceiling.
 fn validate_runtime_max_connections(max_connections: Option<u32>) -> Result<(), ProxyError> {

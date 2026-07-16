@@ -19,14 +19,18 @@ use crate::{
     filter::{HttpFilter, HttpFilterContext},
 };
 
-// -----------------------------------------------------------------------------
-// Config
-// -----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 /// Maximum supported endpoint-selector connection timeout in milliseconds.
 ///
 /// Matches the limit used for configured upstream clusters.
 const MAX_CONNECTION_TIMEOUT_MS: u64 = 3_600_000;
+
+// -----------------------------------------------------------------------------
+// Config
+// -----------------------------------------------------------------------------
 
 /// Connection tuning for dynamically selected upstream endpoints.
 ///

@@ -375,17 +375,6 @@ filter_chains:
               - "127.0.0.1:9090"
 "#;
 
-    /// Assert a resolved filter's chain, indices, and type name.
-    fn assert_filter(f: &ResolvedFilterDump, chain: &str, chain_idx: usize, pipeline_idx: usize, filter: &str) {
-        assert_eq!(f.chain, chain, "chain mismatch for filter {filter}");
-        assert_eq!(f.chain_index, chain_idx, "chain_index mismatch for filter {filter}");
-        assert_eq!(
-            f.pipeline_index, pipeline_idx,
-            "pipeline_index mismatch for filter {filter}"
-        );
-        assert_eq!(f.filter, filter, "filter type mismatch");
-    }
-
     #[test]
     fn representative_config_roundtrips_through_yaml_serialization() {
         let config = Config::from_yaml(REPRESENTATIVE_CONFIG_YAML).unwrap();
@@ -695,5 +684,20 @@ filter_chains:
             Some("not-a-sequence"),
             "non-sequence clusters value should remain unchanged"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test Utilities
+    // -----------------------------------------------------------------------
+
+    /// Assert a resolved filter's chain, indices, and type name.
+    fn assert_filter(f: &ResolvedFilterDump, chain: &str, chain_idx: usize, pipeline_idx: usize, filter: &str) {
+        assert_eq!(f.chain, chain, "chain mismatch for filter {filter}");
+        assert_eq!(f.chain_index, chain_idx, "chain_index mismatch for filter {filter}");
+        assert_eq!(
+            f.pipeline_index, pipeline_idx,
+            "pipeline_index mismatch for filter {filter}"
+        );
+        assert_eq!(f.filter, filter, "filter type mismatch");
     }
 }
